@@ -1,5 +1,10 @@
 import type { Language } from "./config.js";
 
+export interface ReportUiText {
+	zh: string;
+	en: string;
+}
+
 export interface UiCopy {
 	htmlLang: string;
 	goal: string;
@@ -41,6 +46,7 @@ export interface UiCopy {
 	optimizing: string;
 	waiting: string;
 	noDetailedOutput: string;
+	notProvided: string;
 	themeToLight: string;
 	themeToDark: string;
 	draftStatus: string;
@@ -104,6 +110,7 @@ const ZH: UiCopy = {
 	optimizing: "优化中",
 	waiting: "等待",
 	noDetailedOutput: "暂无详细输出",
+	notProvided: "未填写",
 	themeToLight: "切换到浅色",
 	themeToDark: "切换到深色",
 	draftStatus: "待启动",
@@ -163,6 +170,7 @@ const EN: UiCopy = {
 	optimizing: "Optimizing",
 	waiting: "Waiting",
 	noDetailedOutput: "No detailed output",
+	notProvided: "Not provided",
 	themeToLight: "Switch to light",
 	themeToDark: "Switch to dark",
 	draftStatus: "Ready to start",
@@ -184,4 +192,22 @@ const EN: UiCopy = {
 
 export function copy(language: Language): UiCopy {
 	return language === "en" ? EN : ZH;
+}
+
+/** Renderer-owned copy is paired explicitly so authored content is never scanned or translated. */
+export function reportUiText(zh: string, en: string): ReportUiText {
+	return { zh, en };
+}
+
+export function reportUiCopy(
+	key: keyof UiCopy,
+	...args: number[]
+): ReportUiText {
+	const resolve = (source: UiCopy) => {
+		const value = source[key];
+		return typeof value === "function"
+			? (value as (...values: number[]) => string)(...args)
+			: value;
+	};
+	return { zh: resolve(ZH), en: resolve(EN) };
 }

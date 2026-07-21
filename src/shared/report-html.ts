@@ -251,6 +251,7 @@ html.dark .flow-tooltip[data-size="lg"]{color:var(--report-text)}
 .flow-tooltip[data-side="left"][data-show="true"]{transform:translate(calc(-100% - 6px),-50%) scale(1)}
 .flow-tooltip[data-side="top"]{transform-origin:center bottom;transform:translate(-50%,calc(-100% + 2px)) scale(.985)}
 .flow-tooltip[data-side="top"][data-show="true"]{transform:translate(-50%,calc(-100% - 6px)) scale(1)}
+[data-language-option][aria-pressed="true"]{background:var(--report-surface);color:var(--report-text);box-shadow:0 1px 5px var(--shadow-chip)}
 [data-copy-feedback]{transform:translate(-50%,3px)}
 [data-copy-command][data-copy-state="success"] [data-copy-icon]{display:none}
 [data-copy-command][data-copy-state="success"] [data-copy-check]{display:inline-flex}
@@ -367,8 +368,73 @@ main>:not(dialog):nth-child(n+5){animation-delay:.2s}
 }
 
 function reportScript() {
-	return `${reportThemeBootScript()}
+	return `${reportLanguageBootScript()}
+${reportThemeBootScript()}
 ${reportAsset("rough.js")}
+(() => {
+  const KEY = "pi-flow-language";
+  const root = document.documentElement;
+  const valid = (value) => value === "zh" || value === "en";
+  const stored = () => {
+    try { return localStorage.getItem(KEY); } catch { return null; }
+  };
+  const effective = () => {
+    const value = stored();
+    return valid(value) ? value : (valid(root.dataset.reportDefaultLanguage) ? root.dataset.reportDefaultLanguage : "zh");
+  };
+  const apply = (language, persist = false) => {
+    if (!valid(language)) language = effective();
+    if (persist) {
+      try { localStorage.setItem(KEY, language); } catch {}
+    }
+    root.dataset.language = language;
+    root.lang = language === "en" ? "en" : "zh-CN";
+    const title = root.getAttribute("data-report-title-" + language);
+    if (title !== null) document.title = title;
+    document.querySelectorAll("[data-ui-zh][data-ui-en]").forEach((node) => {
+      node.textContent = node.getAttribute("data-ui-" + language) || "";
+    });
+    document.querySelectorAll("*").forEach((node) => {
+      [...node.attributes].forEach((attribute) => {
+        const match = /^data-ui-(.+)-(zh|en)$/.exec(attribute.name);
+        if (!match || match[2] !== language) return;
+        const key = match[1];
+        const target = key === "aria-label" || key === "title" ? key : "data-" + key;
+        node.setAttribute(target, attribute.value);
+      });
+    });
+    document.querySelectorAll("[data-language-option]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.getAttribute("data-language-option") === language));
+    });
+    document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+      button.setAttribute("aria-label", root.classList.contains("dark") ? (button.dataset.labelLight || "") : (button.dataset.labelDark || ""));
+    });
+    document.querySelectorAll("[data-transcript-expand]").forEach((button) => {
+      const label = button.querySelector("[data-transcript-expand-label]");
+      if (label) label.textContent = button.getAttribute("aria-expanded") === "true" ? button.dataset.collapseLabel : button.dataset.expandLabel;
+    });
+    document.querySelectorAll("time[data-localized-time]").forEach((node) => {
+      const timestamp = new Date(node.getAttribute("datetime") || "");
+      if (Number.isNaN(timestamp.getTime())) return;
+      const options = node.dataset.timeStyle === "medium" ? { dateStyle: "medium", timeStyle: "short" } : undefined;
+      node.textContent = timestamp.toLocaleString(language === "en" ? "en" : "zh-CN", options);
+    });
+    document.querySelectorAll("[data-copy-command][data-copy-state]").forEach((button) => {
+      const feedback = button.querySelector("[data-copy-feedback]");
+      if (feedback) feedback.textContent = button.dataset.copyState === "success" ? button.dataset.copySuccess : button.dataset.copyFailure;
+    });
+    document.dispatchEvent(new CustomEvent("pi-flow-language", { detail: { language } }));
+  };
+  window.piFlowLanguage = { apply, effective };
+  document.addEventListener("click", (event) => {
+    const button = event.target instanceof Element ? event.target.closest("[data-language-option]") : null;
+    if (!button) return;
+    apply(button.getAttribute("data-language-option"), true);
+  });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => apply(effective()));
+  else apply(effective());
+})();
+
 (() => {
   const formatElapsedMinutes = ${formatElapsedMinutes.toString()};
   let timer;
@@ -663,6 +729,9 @@ ${reportAsset("rough.js")}
     hide();
   };
   window.addEventListener("scroll", hideOnScroll, true);
+  document.addEventListener("pi-flow-language", () => {
+    if (activeNode && tip?.dataset.show === "true") show(activeNode);
+  });
 })();
 
 (() => {
@@ -698,6 +767,7 @@ ${reportAsset("rough.js")}
     apply(effective());
   });
   window.addEventListener("DOMContentLoaded", syncToggle);
+  document.addEventListener("pi-flow-language", syncToggle);
   syncToggle();
 })();
 
@@ -934,6 +1004,10 @@ window.piFlowDraw = (root = document) => {
   });
   window.addEventListener("resize", redraw);
 })();`;
+}
+
+function reportLanguageBootScript() {
+	return `(()=>{const root=document.documentElement;let stored=null;try{stored=localStorage.getItem("pi-flow-language")}catch{}const fallback=root.dataset.reportDefaultLanguage;const language=stored==="zh"||stored==="en"?stored:fallback==="en"?"en":"zh";root.lang=language==="en"?"en":"zh-CN";root.dataset.language=language;})();`;
 }
 
 function reportThemeBootScript() {

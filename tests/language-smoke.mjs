@@ -435,7 +435,7 @@ try {
 	);
 	const flow = sampleFlow();
 	const html = flowHtml.renderFlowHtml(flowDir, flow);
-	assert(html.includes('<html lang="en">'), "English Flow HTML lang missing");
+	assert(html.includes('<html lang="en"'), "English Flow HTML lang missing");
 	assert(
 		html.includes(">Flow</span>") && html.includes("/flow go F1"),
 		"English Flow HTML chrome missing",

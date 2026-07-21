@@ -8,6 +8,8 @@
 - 样式 token 单一事实源在 `report-blocks`：`TONE`（text/seal/soft/dot）、`CHIP`（soft/neutral）、`TYPE`（meta/micro/tiny）、`PILL_INTERACTIVE`；检查卡/模型 token 在 `report-review` 只组合这些 token，不另起色表。
 - 检查态文案走 `copy()`：`accepting` / `checking` / `completing` / `optimizing` / `noDetailedOutput`。
 - 主题：Tailwind `darkMode: "class"`；默认读系统 `prefers-color-scheme`；用户切换写入 `localStorage.pi-flow-theme`（`light`/`dark`），有本地偏好后不再跟系统；无偏好时系统变化会同步。首屏用 head 内同步脚本防 FOUC。太阳/月亮按钮使用 Lucide；Flow 页放在 logo header 右侧，随页面滚动，不固定浮层。
+- 报告界面语言：Flow 与独立质检页共用右上角、主题按钮左侧的「中 / EN」分段控制。唯一浏览器偏好为 `localStorage.pi-flow-language`，只接受 `zh` / `en`；缺失或非法时回退到该报告渲染时已解析的 `Language`。head 内早期脚本先同步 `<html lang>`，现有 CSP hash 授权脚本再按显式 `data-ui-*` 标记更新正文、document title、tooltip / aria 等属性和带 `data-localized-time` 的时间；点击只原位更新并保留当前主题、步骤、dialog、展开态和计时器，不 reload。普通刷新及现有相对 `events` SSE reload 继续从同一偏好恢复。
+- 语言边界：只有插件拥有的界面 copy / 交互 metadata 能携带中英 pair；Flow/步骤标题、计划 Markdown、source/Q&A、检查发现、顾问建议、摘要、handoff、日志、命令、路径和模型名等 authored/factual 内容不得标记、扫描或翻译。Markdown block 是混合边界：checkbox 的完成/进行中/阻塞状态（待做保留仅屏幕阅读器可见）与空内容 fallback 属 renderer UI，必须显式标记并切换；checkbox 描述、正文、代码等仍保持 authored 原文且不得进入 marker 属性。允许 tooltip 等 UI 外壳在两个显式属性值中重复嵌入同一份事实文本，但两份中的事实字节必须一致。禁止全局 text-node replacement。
 - 主题 token 单一事实源在 `report-html` 的 CSS 变量：`--report-*` 管 page/surface/text/chip，`--tone-*-surface` 管语义面，`--rough-*` 管 rough 墨线/填充。组件只引用 token，不各自硬编码暗色 surface。暗色下小状态卡可用低饱和 tonal surface；大卡片主要用中等对比 `--rough-*-card` 边线 + icon/节点保留语义色，避免 neon 彩框，也避免颜色消失。
 - HTML 只展示状态，不保存事实。Flow 页从 `flow.json` 读取 Flow/步骤起止时间，从 `rounds[].elapsedMs` 读取已结算轮次耗时，并在并行批次读取 Flow 根目录 `G<N>-worker.json`；独立质检页接收刚提交的 session `review-checkpoint`，并与质检 prompt 共用 `buildContextEvidence` 的 review 投影。`.flow/reviews/` 永不作为输入。
 - 渲染前必须校验状态源；校验失败页只用于排查，不自动打开半成品。
@@ -32,7 +34,7 @@
 ## 视觉与进度
 
 - 静态 HTML 完全自包含：构建期 Tailwind CLI 扫描 `src/**/*.ts` 生成压缩 CSS，并复制 rough.js browser bundle；renderer 从 `dist/assets/` 读取、进程级缓存并内联，发布包运行时不读 `node_modules`，不请求 CDN 或其他远程资源。图标继续使用本地 vendored Lucide SVG。
-- `<head>` 只保留一个受 SHA-256 CSP hash 授权的内联 script，包含首屏主题、rough.js 与交互逻辑；CSP 固定为 `default-src 'none'`、`style-src 'unsafe-inline'`、hash-only `script-src`、`connect-src 'self'`、`img-src data:`、`base-uri 'none'`、`form-action 'none'`。SSE 使用报告 URL 下的相对 `events`。
+- `<head>` 只保留一个受 SHA-256 CSP hash 授权的内联 script，包含首屏语言与主题、rough.js 与交互逻辑；语言切换不增加 script、依赖、网络请求或整页双份 body。CSP 固定为 `default-src 'none'`、`style-src 'unsafe-inline'`、hash-only `script-src`、`connect-src 'self'`、`img-src data:`、`base-uri 'none'`、`form-action 'none'`。SSE 使用报告 URL 下的相对 `events`。
 - 短周期耗时统一显示分钟：`<0.1m`、一位小数（如 `0.7m` / `3.2m`），10 分钟起取整（如 `12m`）；文字弱灰、tabular-nums、无图标。步骤耗时同时出现在 stepper 检查点行尾和步骤面板标题旁；轮次耗时出现在轮次标题行尾。Flow 级只显示起止时刻，不显示总耗时数字。步骤耗时是 `startedAt → completedAt/当前时间` 的墙钟值，跨暂停会偏大。
 - 页面共用一个 60 秒 timer，只更新运行态当前步骤和 active 检查轮的 `data-elapsed-since` 目标，不写盘、不发 SSE。页面隐藏时停止 interval，回到前台立即重算并重启；paused、attention、complete 页面只输出静态耗时，不生成动态目标。
 - 非 live 的 active checkpoint 保留轮次、已结算模型 outcome 和静态耗时，但阶段状态改为「等待」，未结算模型使用灰色暂停图标与「等待」tooltip；检查卡、stepper 检查点和当前步骤主节点不输出「验收中/质检中」、`spin-soft`、`pulse-soft` 或 `bot-soft`。live 同时要求 Flow running、无 attention、Goal running 且属于当前批次；父 Flow running 但 worker 投影为 paused 的 lane 仍是静态态。步骤清单里的 `[~]` `rotate-3d-soft` 只表示 Markdown 计划事实，不代表检查或页面 timer 正在运行。

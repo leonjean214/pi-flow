@@ -401,6 +401,10 @@ async function standaloneReviewReportScenario() {
 	assert(existsSync(reportPath), "standalone review report was not written");
 	const html = readFileSync(reportPath, "utf8");
 	assert(html.includes("data-review-report"), html);
+	assert(html.includes("data-language-toggle"), html);
+	assert(html.includes('data-language-option="zh"'), html);
+	assert(html.includes('data-language-option="en"'), html);
+	assert(html.includes("pi-flow-language"), html);
 	assert(html.includes('data-modal-open="dlg-review-evidence"'), html);
 	assert(html.includes('<dialog id="dlg-review-evidence"'), html);
 	assert(html.includes("以下内容已作为证据提供给质检模型"), html);
@@ -1386,7 +1390,9 @@ async function standaloneReviewStallDisciplineScenario() {
 	const report = readFileSync(reportPath, "utf8");
 	assert(report.includes("第 1 轮") && report.includes("第 10 轮"), report);
 	assert(
-		report.includes("顾问建议 ·") &&
+		report.includes(
+			'data-ui-zh="顾问建议" data-ui-en="Advisor advice">顾问建议</span> ·',
+		) &&
 			report.includes('data-tooltip-size="lg"') &&
 			!report.includes("…全文"),
 		report,

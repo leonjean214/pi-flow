@@ -7,14 +7,14 @@ import type {
 	GoalChecks,
 } from "../goal/types.js";
 import { type Language, reviewToggles } from "./config.js";
-import { copy } from "./copy.js";
+import { type ReportUiText, reportUiCopy, reportUiText } from "./copy.js";
 import { renderMarkdownBlock } from "./html-markdown.js";
 import { roundLabel } from "./progress-labels.js";
 import {
 	escapeHtml,
 	hintMark,
+	localizedText,
 	modelHoverChip,
-	statusText,
 	TONE,
 	type Tone,
 	TYPE,
@@ -60,26 +60,25 @@ export function pendingChecks(): GoalChecks {
 
 interface PhaseMeta {
 	key: "acceptance" | "quality";
-	name: string;
-	hint: string;
+	name: ReportUiText;
+	hint: ReportUiText;
 	icon: ReportIconName;
 	accent: Tone;
 }
 
-function phaseMetas(language: Language): PhaseMeta[] {
-	const t = copy(language);
+function phaseMetas(_language: Language): PhaseMeta[] {
 	return [
 		{
 			key: "acceptance",
-			name: t.completionAcceptance,
-			hint: t.completionAcceptanceHint,
+			name: reportUiCopy("completionAcceptance"),
+			hint: reportUiCopy("completionAcceptanceHint"),
 			icon: "target",
 			accent: "blue",
 		},
 		{
 			key: "quality",
-			name: t.qualityCheck,
-			hint: t.qualityCheckHint,
+			name: reportUiCopy("qualityCheck"),
+			hint: reportUiCopy("qualityCheckHint"),
 			icon: "shield-check",
 			accent: "green",
 		},
@@ -109,16 +108,16 @@ function checkPhaseCard(
 	const titleTone =
 		phase.enabled && state.tone === "gray" ? meta.accent : state.tone;
 	return `<section data-rough-card${tone ? ` data-tone="${tone}"` : ""} class="${surface} p-4">
-<div class="flex items-start justify-between gap-3">${checkTitle(meta, titleTone)}${status}</div>
+<div class="flex items-start justify-between gap-3">${checkTitle(meta, titleTone, ctx.language)}${status}</div>
 ${rows ? `<ol class="mt-3 [&>[data-advisor-consulting]]:mt-2">${rows}</ol>` : ""}
 </section>`;
 }
 
-function checkTitle(meta: PhaseMeta, tone: Tone) {
+function checkTitle(meta: PhaseMeta, tone: Tone, language: Language = "zh") {
 	return `<div class="inline-flex min-w-0 items-center gap-2">
 <span class="${TONE[tone].text}">${reportIcon(meta.icon, "h-5 w-5")}</span>
-<p class="text-base font-semibold leading-6 text-stone-900 dark:text-stone-100">${escapeHtml(meta.name)}</p>
-${hintMark(meta.hint)}
+<p class="text-base font-semibold leading-6 text-stone-900 dark:text-stone-100">${localizedText(meta.name, language)}</p>
+${hintMark(meta.hint, language)}
 </div>`;
 }
 
@@ -130,19 +129,18 @@ function phaseStatusHtml(
 	if (!phase.enabled) return "";
 	// 顾问咨询进行中：阶段状态换成 indigo「顾问介入中」（仅执行中的步骤）。
 	if (phase.consulting && ctx.live)
-		return `<span class="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-indigo-700 dark:text-indigo-300">${reportIcon("loader-circle", "h-3.5 w-3.5 spin-soft")}<span>${ctx.language === "en" ? "Advisor consulting" : "顾问介入中"}</span></span>`;
+		return `<span class="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-indigo-700 dark:text-indigo-300">${reportIcon("loader-circle", "h-3.5 w-3.5 spin-soft")}<span>${localizedText(reportUiText("顾问介入中", "Advisor consulting"), ctx.language)}</span></span>`;
 	if (ctx.hidePassedStatus && state.tone === "green") return "";
 	if (ctx.hideWaitingStatus && state.tone === "gray") return "";
-	return phaseStatusText(state);
+	return phaseStatusText(state, ctx.language);
 }
 
 /** 进行态：轮次列表尾部虚线中间的 spinner pill（与完成态同一视觉位）。 */
 function consultingItem(ctx: CheckViewContext) {
-	const en = ctx.language === "en";
 	const model = ctx.advisorModel
 		? ` · <span class="font-mono font-medium">${escapeHtml(ctx.advisorModel.label)}</span>${ctx.advisorModel.thinking ? `<span class="pl-1 text-[10px] font-normal text-indigo-500/70 dark:text-indigo-300/60">${escapeHtml(ctx.advisorModel.thinking)}</span>` : ""}`
 		: "";
-	return `<li data-advisor-consulting><div class="flex items-center gap-2.5">${advisorDash()}<span class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--tone-indigo-surface)] px-2.5 py-1 text-[11px] font-semibold text-indigo-800 dark:text-indigo-300"><span class="text-indigo-600 dark:text-indigo-400">${reportIcon("loader-circle", "h-3.5 w-3.5 spin-soft")}</span>${en ? "Consulting the advisor" : "正在咨询顾问"}${model}</span>${advisorDash()}</div></li>`;
+	return `<li data-advisor-consulting><div class="flex items-center gap-2.5">${advisorDash()}<span class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--tone-indigo-surface)] px-2.5 py-1 text-[11px] font-semibold text-indigo-800 dark:text-indigo-300"><span class="text-indigo-600 dark:text-indigo-400">${reportIcon("loader-circle", "h-3.5 w-3.5 spin-soft")}</span>${localizedText(reportUiText("正在咨询顾问", "Consulting the advisor"), ctx.language)}${model}</span>${advisorDash()}</div></li>`;
 }
 
 function advisorDash() {
@@ -151,17 +149,19 @@ function advisorDash() {
 
 /** 完成态：轮次间虚线中间的可悬浮顾问建议胶囊。 */
 function advisorSlot(advisor: CheckRoundAdvisor, language: Language) {
-	const label = language === "en" ? "Advisor advice" : "顾问建议";
-	return `<div data-advisor-slot class="flex items-center gap-2.5">${advisorDash()}<span tabindex="0" data-tooltip="${escapeHtml(advisor.advice)}" data-tooltip-side="auto" data-tooltip-size="lg" class="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-[var(--tone-indigo-surface)] px-2.5 py-1 text-[11px] font-semibold text-indigo-800 dark:text-indigo-300">${reportIcon("compass", "h-3.5 w-3.5")} ${label} · <span class="font-mono font-medium">${escapeHtml(advisor.model.split("/").at(-1) ?? advisor.model)}</span><span class="pl-1 text-[10px] font-normal text-indigo-500/70 dark:text-indigo-300/60">${escapeHtml(advisor.thinking)}</span></span>${advisorDash()}</div>`;
+	const label = reportUiText("顾问建议", "Advisor advice");
+	return `<div data-advisor-slot class="flex items-center gap-2.5">${advisorDash()}<span tabindex="0" data-tooltip="${escapeHtml(advisor.advice)}" data-tooltip-side="auto" data-tooltip-size="lg" class="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-[var(--tone-indigo-surface)] px-2.5 py-1 text-[11px] font-semibold text-indigo-800 dark:text-indigo-300">${reportIcon("compass", "h-3.5 w-3.5")} ${localizedText(label, language)} · <span class="font-mono font-medium">${escapeHtml(advisor.model.split("/").at(-1) ?? advisor.model)}</span><span class="pl-1 text-[10px] font-normal text-indigo-500/70 dark:text-indigo-300/60">${escapeHtml(advisor.thinking)}</span></span>${advisorDash()}</div>`;
 }
 
-function phaseStatusText(state: PhaseView) {
-	if (!state.pulse) return statusText(state.label, state.tone);
-	return `<span class="inline-flex shrink-0 items-center gap-1 text-xs font-medium ${TONE[state.tone].text}">${reportIcon("loader-circle", "h-3.5 w-3.5 spin-soft")}<span>${escapeHtml(state.label)}</span></span>`;
+function phaseStatusText(state: PhaseView, language: Language = "zh") {
+	if (!state.pulse)
+		return `<span class="shrink-0 text-xs font-medium ${TONE[state.tone].text}">${localizedText(state.uiLabel, language)}</span>`;
+	return `<span class="inline-flex shrink-0 items-center gap-1 text-xs font-medium ${TONE[state.tone].text}">${reportIcon("loader-circle", "h-3.5 w-3.5 spin-soft")}<span>${localizedText(state.uiLabel, language)}</span></span>`;
 }
 
 export interface PhaseView {
 	label: string;
+	uiLabel: ReportUiText;
 	tone: Tone;
 	pulse?: boolean;
 }
@@ -172,37 +172,42 @@ export function phaseState(
 	language: Language = "zh",
 	live = false,
 ): PhaseView {
-	const t = copy(language);
-	if (!phase.enabled) return { label: t.disabled, tone: "gray" };
+	if (!phase.enabled)
+		return phaseView(reportUiCopy("disabled"), language, "gray");
 	if (phase.active)
 		return live
-			? {
-					label: phaseActiveLabel(key, language),
-					tone: "blue",
-					pulse: true,
-				}
-			: { label: t.waiting, tone: "gray" };
+			? phaseView(phaseActiveUiLabel(key), language, "blue", true)
+			: phaseView(reportUiCopy("waiting"), language, "gray");
 	const last = phase.rounds.at(-1);
-	if (!last) return { label: t.waiting, tone: "gray" };
-	if (last.result === "passed") return { label: t.passed, tone: "green" };
-	if (last.result === "error") return { label: t.error, tone: "amber" };
-	if (live)
-		return {
-			label: phaseRepairLabel(key, language),
-			tone: "blue",
-			pulse: true,
-		};
-	return { label: t.failed, tone: "red" };
+	if (!last) return phaseView(reportUiCopy("waiting"), language, "gray");
+	if (last.result === "passed")
+		return phaseView(reportUiCopy("passed"), language, "green");
+	if (last.result === "error")
+		return phaseView(reportUiCopy("error"), language, "amber");
+	if (live) return phaseView(phaseRepairUiLabel(key), language, "blue", true);
+	return phaseView(reportUiCopy("failed"), language, "red");
 }
 
-function phaseActiveLabel(key: PhaseMeta["key"], language: Language) {
-	const t = copy(language);
-	return key === "acceptance" ? t.accepting : t.checking;
+function phaseView(
+	uiLabel: ReportUiText,
+	language: Language,
+	tone: Tone,
+	pulse?: boolean,
+): PhaseView {
+	return {
+		label: uiLabel[language],
+		uiLabel,
+		tone,
+		...(pulse ? { pulse } : {}),
+	};
 }
 
-function phaseRepairLabel(key: PhaseMeta["key"], language: Language) {
-	const t = copy(language);
-	return key === "acceptance" ? t.completing : t.optimizing;
+function phaseActiveUiLabel(key: PhaseMeta["key"]) {
+	return reportUiCopy(key === "acceptance" ? "accepting" : "checking");
+}
+
+function phaseRepairUiLabel(key: PhaseMeta["key"]) {
+	return reportUiCopy(key === "acceptance" ? "completing" : "optimizing");
 }
 
 /** stepper 用的微型检查点：验收 + 质检各一枚，保持紧凑横排。 */
@@ -215,23 +220,22 @@ export function checkDots(
 		criteriaChanged?: boolean;
 	},
 ) {
-	const t = copy(options.language);
 	return phaseMetas(options.language)
 		.map((meta) => {
-			const label = phaseShortLabel(meta.key, options.language);
+			const label = phaseShortLabel(meta.key);
 			const flagged = meta.key === "acceptance" && options.criteriaChanged;
 			if (!checks)
 				return options.goalComplete
 					? checkMiniChip(
 							label,
-							{ label: t.passed, tone: "green" },
+							phaseView(reportUiCopy("passed"), options.language, "green"),
 							0,
 							options.language,
 							flagged,
 						)
 					: checkMiniChip(
 							label,
-							{ label: t.waiting, tone: "gray" },
+							phaseView(reportUiCopy("waiting"), options.language, "gray"),
 							0,
 							options.language,
 							flagged,
@@ -244,13 +248,14 @@ export function checkDots(
 		.join("");
 }
 
-function phaseShortLabel(key: PhaseMeta["key"], language: Language) {
-	if (language === "en") return key === "acceptance" ? "Accept" : "QA";
-	return key === "acceptance" ? "验收" : "质检";
+function phaseShortLabel(key: PhaseMeta["key"]) {
+	return key === "acceptance"
+		? reportUiText("验收", "Accept")
+		: reportUiText("质检", "QA");
 }
 
 function checkMiniChip(
-	shortLabel: string,
+	shortLabel: ReportUiText,
 	state: PhaseView,
 	roundCount: number,
 	language: Language = "zh",
@@ -258,12 +263,12 @@ function checkMiniChip(
 ) {
 	const badge =
 		roundCount > 1
-			? `<span class="${TYPE.tiny} font-bold tabular-nums ${TONE[state.tone].text}">${language === "en" ? `×${roundCount}` : `${roundCount}轮`}</span>`
+			? `<span class="${TYPE.tiny} font-bold tabular-nums ${TONE[state.tone].text}">${localizedText(reportUiText(`${roundCount}轮`, `×${roundCount}`), language)}</span>`
 			: "";
 	const marker = criteriaChanged
 		? `<span class="font-bold text-amber-700 dark:text-amber-300">▲</span>`
 		: "";
-	return `<span class="inline-flex items-center gap-1 whitespace-nowrap ${TYPE.micro} font-medium leading-none ${TONE[state.tone].text}"><span class="h-1.5 w-1.5 shrink-0 rounded-full ${TONE[state.tone].dot}${state.pulse ? " pulse-soft" : ""}"></span><span>${escapeHtml(shortLabel)}</span>${badge}${marker}</span>`;
+	return `<span class="inline-flex items-center gap-1 whitespace-nowrap ${TYPE.micro} font-medium leading-none ${TONE[state.tone].text}"><span class="h-1.5 w-1.5 shrink-0 rounded-full ${TONE[state.tone].dot}${state.pulse ? " pulse-soft" : ""}"></span><span>${localizedText(shortLabel, language)}</span>${badge}${marker}</span>`;
 }
 
 const MODEL_TONE: Record<CheckModelStatus, Tone> = {
@@ -304,7 +309,7 @@ function activeRoundItem(
 			...(model.outcome
 				? {
 						summary: model.outcome.details.trim()
-							? cleanModelFeedback(model.outcome.details, ctx.language)
+							? cleanModelFeedback(model.outcome.details)
 							: model.outcome.summary,
 					}
 				: {}),
@@ -342,9 +347,11 @@ function roundItem(
 	});
 }
 
+type ReviewModelSnapshot = CheckModelSnapshot & { uiLabel?: ReportUiText };
+
 function reviewRoundItem(input: {
 	round: number;
-	models: CheckModelSnapshot[];
+	models: ReviewModelSnapshot[];
 	language: Language;
 	meta: PhaseMeta;
 	details?: string;
@@ -354,10 +361,10 @@ function reviewRoundItem(input: {
 	liveStartedAt?: number;
 	live?: boolean;
 }) {
-	const title =
-		input.language === "en"
-			? `Round ${input.round}`
-			: roundLabel(input.round, input.language);
+	const title = reportUiText(
+		roundLabel(input.round, "zh"),
+		`Round ${input.round}`,
+	);
 	const elapsed =
 		input.elapsedMs === undefined
 			? ""
@@ -371,6 +378,7 @@ function reviewRoundItem(input: {
 		? renderMarkdownBlock(
 				formatReviewResultLines(input.details).join("\n"),
 				"mt-1 space-y-2 text-xs leading-5 text-stone-600 dark:text-stone-300",
+				input.language,
 			)
 		: "";
 	// 顾问建议占据该轮尾部的虚线位（一等事实，不藏进详情）；无顾问时维持普通分隔线。
@@ -383,15 +391,15 @@ function reviewRoundItem(input: {
 		: "";
 	const nextRoundGap = input.advisor ? " [&+li]:mt-3" : "";
 	// 轮次 meta 独占一行。双列 max-content grid + w-fit：虚线跟模型块同宽。
-	return `<li class="[&:last-child_[data-round-rule]]:hidden${nextRoundGap}"><div><p class="flex items-center justify-between gap-3 ${TYPE.meta} font-medium tabular-nums tracking-[0.01em] text-stone-500 dark:text-stone-400"><span>${escapeHtml(title)}</span>${elapsed}</p><div class="mt-1.5 w-fit max-w-full"><div class="grid w-fit max-w-full gap-1.5 [grid-template-columns:repeat(2,max-content)]">${models}</div>${input.advisor ? "" : rule}</div>${advisor}${detailHtml}</div></li>`;
+	return `<li class="[&:last-child_[data-round-rule]]:hidden${nextRoundGap}"><div><p class="flex items-center justify-between gap-3 ${TYPE.meta} font-medium tabular-nums tracking-[0.01em] text-stone-500 dark:text-stone-400"><span>${localizedText(title, input.language)}</span>${elapsed}</p><div class="mt-1.5 w-fit max-w-full"><div class="grid w-fit max-w-full gap-1.5 [grid-template-columns:repeat(2,max-content)]">${models}</div>${input.advisor ? "" : rule}</div>${advisor}${detailHtml}</div></li>`;
 }
 
 function roundModels(
 	round: CheckPhase["rounds"][number],
 	language: Language,
-): CheckModelSnapshot[] {
+): ReviewModelSnapshot[] {
 	const details = round.details?.trim();
-	const sections = modelSections(details ?? "", language);
+	const sections = modelSections(details ?? "");
 	if (round.models?.length)
 		return round.models.map((model, index) => {
 			const section =
@@ -402,42 +410,43 @@ function roundModels(
 			const summary =
 				section?.body ??
 				(round.models?.length === 1 && details
-					? cleanModelFeedback(details, language)
+					? cleanModelFeedback(details)
 					: model.summary);
 			return summary ? { ...model, summary } : model;
 		});
 	const source = [round.details, round.summary].filter(Boolean).join("\n\n");
-	const fallbackSections = modelSections(source, language);
+	const fallbackSections = modelSections(source);
 	if (fallbackSections.length > 0)
 		return fallbackSections.map((section) => ({
 			label: section.label,
 			status: roundResultModelStatus(round.result),
 			summary: section.body,
 		}));
+	const fallbackLabel = resultUiLabel(round.result);
 	return [
 		{
-			label: resultLabel(round.result, language),
+			label: fallbackLabel[language],
+			uiLabel: fallbackLabel,
 			status: roundResultModelStatus(round.result),
 			summary: [round.summary, round.details].filter(Boolean).join("\n\n"),
 		},
 	];
 }
 
-function modelSections(text: string, language: Language) {
+function modelSections(text: string) {
 	const normalized = text.replace(/^(PASS|FAIL)\s*/iu, "").trim();
 	const pattern =
 		/(?:^|\n)(?:模型|Model)\s+\d+\s+·\s+([^\n]+)\n([\s\S]*?)(?=\n\n(?:模型|Model)\s+\d+\s+·|$)/giu;
 	return [...normalized.matchAll(pattern)]
 		.map((match) => ({
 			label: match[1].trim(),
-			body: cleanModelFeedback(match[2], language),
+			body: cleanModelFeedback(match[2]),
 		}))
 		.filter((item) => item.label);
 }
 
-function cleanModelFeedback(text: string, language: Language) {
-	const cleaned = formatReviewResultLines(text).join("\n").trim();
-	return cleaned || copy(language).noDetailedOutput;
+function cleanModelFeedback(text: string) {
+	return formatReviewResultLines(text).join("\n").trim();
 }
 
 function roundResultModelStatus(result: CheckResult): CheckModelStatus {
@@ -446,23 +455,23 @@ function roundResultModelStatus(result: CheckResult): CheckModelStatus {
 	return "error";
 }
 
-function resultLabel(result: CheckResult, language: Language) {
-	const t = copy(language);
-	if (result === "passed") return language === "en" ? "passed" : "通过";
-	if (result === "failed") return t.failed;
-	return t.error;
+function resultUiLabel(result: CheckResult) {
+	if (result === "passed") return reportUiText("通过", "passed");
+	if (result === "failed") return reportUiCopy("failed");
+	return reportUiCopy("error");
 }
 
 function reviewModelChip(
-	model: CheckModelSnapshot,
+	model: ReviewModelSnapshot,
 	meta: PhaseMeta,
 	language: Language,
 	live: boolean,
 ) {
 	const running = model.status === "running";
 	return modelHoverChip({
-		label: model.label,
-		tooltip: modelTooltip(model, meta.key, language, live),
+		label: model.uiLabel ?? model.label,
+		tooltip: modelTooltip(model, meta.key, live),
+		language,
 		iconHtml:
 			running && !live
 				? reportIcon("pause", "h-3 w-3")
@@ -475,14 +484,10 @@ function reviewModelChip(
 function modelTooltip(
 	model: CheckModelSnapshot,
 	key: PhaseMeta["key"],
-	language: Language,
 	live: boolean,
 ) {
-	const fallback =
-		model.status === "running"
-			? live
-				? phaseActiveLabel(key, language)
-				: copy(language).waiting
-			: copy(language).noDetailedOutput;
-	return model.summary?.trim() || fallback;
+	if (model.summary?.trim()) return model.summary.trim();
+	if (model.status === "running")
+		return live ? phaseActiveUiLabel(key) : reportUiCopy("waiting");
+	return reportUiCopy("noDetailedOutput");
 }

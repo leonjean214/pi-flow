@@ -4,18 +4,21 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { GoalChecks } from "../goal/types.js";
 import type { Language } from "../shared/config.js";
 import type { ContextEvidenceResult } from "../shared/context-evidence.js";
+import { type ReportUiText, reportUiText } from "../shared/copy.js";
 import { roundLabel } from "../shared/progress-labels.js";
 import {
 	escapeHtml,
 	escapeHtmlLiteral,
+	localizedAttribute,
+	localizedText,
 	modal,
 	modalTrigger,
 	pageShell,
+	reportControls,
 	statusText,
 	TONE,
 	type Tone,
 	TYPE,
-	themeToggleButton,
 } from "../shared/report-blocks.js";
 import { notifyReportChanged } from "../shared/report-client.js";
 import { flowLogoDataUri } from "../shared/report-html.js";
@@ -56,15 +59,16 @@ export function renderReviewReport(
 	evidence: ContextEvidenceResult,
 ) {
 	const updatedAt = new Date();
+	const title = reportUiText("Flow — 独立质检", "Flow — Quality review");
 	return pageShell(
-		language === "en" ? "Flow — Quality review" : "Flow — 独立质检",
+		title[language],
 		[
 			brandHeader(language),
 			headerCard(checkpoint, language),
 			roundsSection(checkpoint, language),
 			footer(updatedAt, checkpoint, evidence, language),
 		].join("\n"),
-		{ language, themeToggle: false },
+		{ language, themeToggle: false, title },
 	);
 }
 
@@ -73,13 +77,13 @@ function brandHeader(language: Language) {
 	const mark = logo
 		? `<img src="${logo}" alt="Flow" class="h-full w-full rounded-xl object-cover" />`
 		: reportIcon("sparkle", "h-6 w-6 text-stone-900 dark:text-stone-100");
-	return `<div class="flex items-center justify-between gap-3 px-1 pb-1" aria-label="Flow Review">
+	return `<div class="flex items-center justify-between gap-3 px-1 pb-1" ${localizedAttribute("aria-label", reportUiText("Flow 质检", "Flow Review"), language)}>
 <div class="flex min-w-0 items-center gap-3">
 <span class="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--report-surface)] p-1 shadow-[0_0_0_1px_var(--ring-subtle),0_10px_24px_var(--shadow-chip)]">${mark}</span>
 <span class="font-serif text-3xl font-semibold tracking-[-0.055em] text-stone-950 dark:text-stone-50">Flow</span>
-<span class="text-sm font-medium text-stone-400 dark:text-stone-500">/ ${language === "en" ? "Review" : "质检"}</span>
+<span class="text-sm font-medium text-stone-400 dark:text-stone-500">/ ${localizedText(reportUiText("质检", "Review"), language)}</span>
 </div>
-${themeToggleButton(language)}
+${reportControls(language)}
 </div>`;
 }
 
@@ -88,14 +92,14 @@ function headerCard(checkpoint: ReviewCheckpointState, language: Language) {
 	return `<header data-review-report data-rough-card data-tone="${state.tone}" class="bg-[var(--report-surface)] px-6 py-5">
 <div class="flex flex-wrap items-start justify-between gap-4">
 <div class="min-w-0 flex-1">
-<h1 class="font-serif text-3xl leading-snug text-stone-900 dark:text-stone-100">${language === "en" ? "Standalone quality review" : "独立质检"}</h1>
-<p class="mt-2 text-sm leading-6 text-stone-500 dark:text-stone-400">${language === "en" ? "Delivery quality for the current task in this conversation" : "当前会话当前任务的交付质量"}</p>
+<h1 class="font-serif text-3xl leading-snug text-stone-900 dark:text-stone-100">${localizedText(reportUiText("独立质检", "Standalone quality review"), language)}</h1>
+<p class="mt-2 text-sm leading-6 text-stone-500 dark:text-stone-400">${localizedText(reportUiText("当前会话当前任务的交付质量", "Delivery quality for the current task in this conversation"), language)}</p>
 </div>
-${statusText(state.label, state.tone)}
+${statusText(state.uiLabel, state.tone, language)}
 </div>
 <div class="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-dashed border-stone-200 pt-4 dark:border-stone-700">
-<span class="inline-flex items-center gap-1.5 ${TYPE.meta} font-medium ${TONE[state.tone].text}">${reportIcon("shield-check", "h-4 w-4")} ${state.round === 0 ? (language === "en" ? "First review pending" : "等待第 1 轮") : roundLabel(state.round, language)}</span>
-<span class="${TYPE.meta} text-stone-400 dark:text-stone-500">${escapeHtml(roundProgress(checkpoint, language))}</span>
+<span class="inline-flex items-center gap-1.5 ${TYPE.meta} font-medium ${TONE[state.tone].text}">${reportIcon("shield-check", "h-4 w-4")} ${localizedText(state.round === 0 ? reportUiText("等待第 1 轮", "First review pending") : reportUiText(roundLabel(state.round, "zh"), roundLabel(state.round, "en")), language)}</span>
+<span class="${TYPE.meta} text-stone-400 dark:text-stone-500">${localizedText(roundProgress(checkpoint), language)}</span>
 </div>
 </header>`;
 }
@@ -105,10 +109,11 @@ function evidenceRecord(
 	evidence: ContextEvidenceResult,
 	language: Language,
 ) {
-	const label = language === "en" ? "Review evidence" : "质检证据";
+	const label = reportUiText("质检证据", "Review evidence");
 	return `${modalTrigger({
 		id: "dlg-review-evidence",
 		label,
+		language,
 		icon: "notebook",
 	})}${modal({
 		id: "dlg-review-evidence",
@@ -126,18 +131,20 @@ function evidenceBody(
 ) {
 	if (!evidence.ok)
 		return `<div data-context-evidence-error class="rounded-xl bg-[var(--tone-amber-surface)] p-4 text-sm leading-6 text-amber-900 dark:text-amber-200">
-<p class="font-medium">${language === "en" ? "Evidence was not provided to the review models." : "证据未能提供给质检模型"}</p>
+<p class="font-medium">${localizedText(reportUiText("证据未能提供给质检模型", "Evidence was not provided to the review models."), language)}</p>
 <p class="mt-1">${escapeHtmlLiteral(evidence.error.message)}</p>
 </div>`;
 	const provided = checkpoint.active !== null || checkpoint.history.length > 0;
 	const note = provided
-		? language === "en"
-			? "The following content was provided to the review models as evidence."
-			: "以下内容已作为证据提供给质检模型"
-		: language === "en"
-			? "The following content will be provided to the review models as evidence."
-			: "以下内容将作为证据提供给质检模型";
-	return `<p data-review-evidence-note class="text-sm font-medium leading-6 text-stone-700 dark:text-stone-300">${note}</p>
+		? reportUiText(
+				"以下内容已作为证据提供给质检模型",
+				"The following content was provided to the review models as evidence.",
+			)
+		: reportUiText(
+				"以下内容将作为证据提供给质检模型",
+				"The following content will be provided to the review models as evidence.",
+			);
+	return `<p data-review-evidence-note class="text-sm font-medium leading-6 text-stone-700 dark:text-stone-300">${localizedText(note, language)}</p>
 <pre data-context-evidence class="mt-4 rounded-xl bg-[var(--report-surface-muted)] p-4 font-mono text-xs leading-5 text-stone-700 dark:text-stone-300">${escapeHtmlLiteral(evidence.packet.text)}</pre>`;
 }
 
@@ -151,7 +158,7 @@ function roundsSection(checkpoint: ReviewCheckpointState, language: Language) {
 		},
 	};
 	return `<section data-review-rounds class="space-y-3">
-<h2 class="px-1 text-sm font-semibold text-stone-700 dark:text-stone-300">${language === "en" ? "Review rounds" : "质检轮次"}</h2>
+<h2 class="px-1 text-sm font-semibold text-stone-700 dark:text-stone-300">${localizedText(reportUiText("质检轮次", "Review rounds"), language)}</h2>
 ${checkPhases(checks, {
 	keyPrefix: "standalone-review",
 	language,
@@ -172,72 +179,65 @@ function footer(
 	);
 	return `<footer class="grid items-center gap-3 px-1 sm:grid-cols-2">
 <div class="justify-self-start">${evidenceRecord(checkpoint, evidence, language)}</div>
-<p class="justify-self-end ${TYPE.meta} tabular-nums text-stone-400 dark:text-stone-500">${language === "en" ? "Updated" : "更新于"} <time datetime="${timestamp}">${escapeHtml(displayed)}</time></p>
+<p class="justify-self-end ${TYPE.meta} tabular-nums text-stone-400 dark:text-stone-500">${localizedText(reportUiText("更新于", "Updated"), language)} <time data-localized-time datetime="${timestamp}">${escapeHtml(displayed)}</time></p>
 </footer>`;
 }
 
-function reportState(checkpoint: ReviewCheckpointState, language: Language) {
+function reportState(checkpoint: ReviewCheckpointState, _language: Language) {
 	if (checkpoint.phase === "awaiting_agent" && checkpoint.round === 0)
-		return {
-			label:
-				language === "en"
-					? "Running · quality check when done"
-					: "执行中 · 完成后自动质检",
-			tone: "blue" as Tone,
-			round: 0,
-		};
+		return reviewState(
+			reportUiText(
+				"执行中 · 完成后自动质检",
+				"Running · quality check when done",
+			),
+			"blue",
+			0,
+		);
 	if (checkpoint.phase === "checking")
-		return {
-			label: language === "en" ? "Quality check in progress" : "质检中",
-			tone: "blue" as Tone,
-			round: checkpoint.active?.round ?? Math.max(1, checkpoint.round),
-		};
+		return reviewState(
+			reportUiText("质检中", "Quality check in progress"),
+			"blue",
+			checkpoint.active?.round ?? Math.max(1, checkpoint.round),
+		);
 	if (checkpoint.phase === "awaiting_agent")
-		return {
-			label: language === "en" ? "Quality fix in progress" : "优化中",
-			tone: "blue" as Tone,
-			round: Math.max(1, checkpoint.round),
-		};
+		return reviewState(
+			reportUiText("优化中", "Quality fix in progress"),
+			"blue",
+			Math.max(1, checkpoint.round),
+		);
 	const last = checkpoint.history.at(-1);
 	if (last?.result === "passed")
-		return {
-			label: language === "en" ? "Passed" : "已通过",
-			tone: "green" as Tone,
-			round: last.round,
-		};
+		return reviewState(reportUiText("已通过", "Passed"), "green", last.round);
 	if (last?.result === "failed")
-		return {
-			label: language === "en" ? "Failed" : "未通过",
-			tone: "red" as Tone,
-			round: last.round,
-		};
-	return {
-		label: last
-			? language === "en"
-				? "Error"
-				: "错误"
-			: language === "en"
-				? "Waiting"
-				: "等待",
-		tone: last ? ("amber" as Tone) : ("gray" as Tone),
-		round: last?.round ?? Math.max(1, checkpoint.round),
-	};
+		return reviewState(reportUiText("未通过", "Failed"), "red", last.round);
+	return reviewState(
+		last ? reportUiText("错误", "Error") : reportUiText("等待", "Waiting"),
+		last ? "amber" : "gray",
+		last?.round ?? Math.max(1, checkpoint.round),
+	);
 }
 
-function roundProgress(checkpoint: ReviewCheckpointState, language: Language) {
+function reviewState(uiLabel: ReportUiText, tone: Tone, round: number) {
+	return { uiLabel, tone, round };
+}
+
+function roundProgress(checkpoint: ReviewCheckpointState) {
 	if (checkpoint.phase === "awaiting_agent" && checkpoint.round === 0)
-		return language === "en"
-			? "Starts automatically after execution"
-			: "执行完成后自动开始";
+		return reportUiText(
+			"执行完成后自动开始",
+			"Starts automatically after execution",
+		);
 	const active = checkpoint.active;
 	if (active) {
 		const settled = active.models.filter((model) => model.outcome).length;
-		return language === "en"
-			? `${settled}/${active.models.length} models settled`
-			: `${settled}/${active.models.length} 个模型已结算`;
+		return reportUiText(
+			`${settled}/${active.models.length} 个模型已结算`,
+			`${settled}/${active.models.length} models settled`,
+		);
 	}
 	const rounds = checkpoint.history.length;
-	return language === "en"
-		? `${rounds} ${rounds === 1 ? "round" : "rounds"} recorded`
-		: `已记录 ${rounds} 轮`;
+	return reportUiText(
+		`已记录 ${rounds} 轮`,
+		`${rounds} ${rounds === 1 ? "round" : "rounds"} recorded`,
+	);
 }

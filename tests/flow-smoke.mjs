@@ -4667,6 +4667,7 @@ async function htmlScenario() {
 		path: join(cwd, "src", "app.ts"),
 	};
 	const draftHtml = readFileSync(writeFlowHtml(dir, draftFlow), "utf8");
+	const draftRendered = withoutLanguageMetadata(draftHtml);
 	assert(
 		!draftHtml.includes("Flow 计划"),
 		"hero status label should be hidden",
@@ -4736,8 +4737,8 @@ async function htmlScenario() {
 		) &&
 			draftHtml.includes("data-criteria-header") &&
 			draftHtml.includes("data-criteria-list") &&
-			draftHtml.includes(">标准</p>") &&
-			draftHtml.includes(">1 项</span>") &&
+			draftRendered.includes(">标准</p>") &&
+			draftRendered.includes(">1 项</span>") &&
 			draftHtml.includes('d="M13 5h8"'),
 		"flow goal criteria card hierarchy missing",
 	);
@@ -4822,7 +4823,7 @@ async function htmlScenario() {
 	);
 	assert(
 		conversationHtml.includes("data-transcript-role") &&
-			conversationHtml.includes('<time datetime="2026-07-13T08:10:00.000Z"') &&
+			conversationHtml.includes('datetime="2026-07-13T08:10:00.000Z"') &&
 			conversationHtml.includes(
 				`保留 ${transcriptCwd}/src/flow/html.ts &lt;&gt;&amp;&quot;\n第二行`,
 			) &&
@@ -4915,7 +4916,8 @@ async function htmlScenario() {
 		"request log should show structured QA and source when original request is empty",
 	);
 	assert(
-		draftHtml.includes(">验收</span>") && draftHtml.includes(">质检</span>"),
+		draftRendered.includes(">验收</span>") &&
+			draftRendered.includes(">质检</span>"),
 		"stepper check chips missing",
 	);
 	assert(!draftHtml.includes("mermaid"), "mermaid should be removed");
@@ -4986,13 +4988,17 @@ async function htmlScenario() {
 		"more action should use local dots icon, not CSS triangle",
 	);
 	assert(
-		draftHtml.includes(">验收</p>") &&
+		draftRendered.includes(">验收</p>") &&
 			draftHtml.includes('data-tooltip="确保目标完整完成"'),
 		"flow goal review phase missing",
 	);
 	assert(
 		draftHtml.includes("data-theme-toggle") &&
 			draftHtml.includes("pi-flow-theme") &&
+			draftHtml.includes("data-language-toggle") &&
+			draftHtml.includes('data-language-option="zh"') &&
+			draftHtml.includes('data-language-option="en"') &&
+			draftHtml.includes("pi-flow-language") &&
 			draftHtml.includes(".dark\\:hidden:is(.dark *)") &&
 			draftHtml.includes("prefers-color-scheme: dark") &&
 			draftHtml.includes("dark:hidden") &&
@@ -5011,7 +5017,7 @@ async function htmlScenario() {
 		"large hover details should be readable, scrollable, and hoverable",
 	);
 	assert(
-		draftHtml.includes(">质检</p>") &&
+		draftRendered.includes(">质检</p>") &&
 			draftHtml.includes('data-tooltip="把关实现质量"'),
 		"flow quality review phase missing",
 	);
@@ -5299,9 +5305,10 @@ async function htmlScenario() {
 	pausedFlow.goals[0].status = "running";
 	pausedFlow.goals[0].startedAt = pausedFlow.startedAt;
 	const pausedHtml = readFileSync(writeFlowHtml(dir, pausedFlow), "utf8");
+	const pausedRendered = withoutLanguageMetadata(pausedHtml);
 	assert(
 		!pausedHtml.includes('data-rough-seal data-tone="amber"') &&
-			pausedHtml.includes(
+			pausedRendered.includes(
 				'text-amber-800 dark:text-amber-300">已暂停</span>',
 			) &&
 			pausedHtml.includes("0.7m") &&
@@ -5403,11 +5410,14 @@ async function htmlScenario() {
 		"step details should stay visible without disclosure state",
 	);
 	assert(
-		draftHtml.includes("<span>更多</span></span>") &&
-			!draftHtml.includes("<span>更多</span></button>"),
+		draftRendered.includes("<span>更多</span></span>") &&
+			!draftRendered.includes("<span>更多</span></button>"),
 		"draft goal details should keep the hover trigger",
 	);
-	assert(!draftHtml.includes("pending"), "pending leaked into html");
+	assert(
+		!draftRendered.includes("pending"),
+		"pending leaked into rendered html",
+	);
 	assert(
 		!draftHtml.includes("未绑定 session"),
 		"internal session label leaked",
@@ -5470,6 +5480,7 @@ async function htmlScenario() {
 	];
 	const htmlPath = writeFlowHtml(dir, flow);
 	const html = readFileSync(htmlPath, "utf8");
+	const completeRendered = withoutLanguageMetadata(html);
 	assert(
 		html.includes("tailwindcss v3.4.17") &&
 			html.includes(".max-w-\\[1480px\\]") &&
@@ -5549,10 +5560,10 @@ async function htmlScenario() {
 	);
 	assert(
 		html.includes('<article data-rough-card data-tone="green"') &&
-			html.includes(
+			completeRendered.includes(
 				'shrink-0 text-xs font-medium text-emerald-800 dark:text-emerald-300">已完成</span>',
 			) &&
-			!html.includes(
+			!completeRendered.includes(
 				'shrink-0 text-xs font-medium text-emerald-800 dark:text-emerald-300">已通过</span>',
 			),
 		"completed goal card should use green edge and hide repeated passed statuses",
@@ -5604,6 +5615,7 @@ async function htmlScenario() {
 		!html.includes("pnpm test"),
 		"step more modal should not repeat handoff content",
 	);
+	const currentHtml = completeRendered;
 	for (const label of [
 		"next action",
 		">Verification</p>",
@@ -5623,8 +5635,8 @@ async function htmlScenario() {
 		">updated</dt>",
 	])
 		assert(
-			!html.includes(label),
-			`flow html still has English UI label: ${label}`,
+			!currentHtml.includes(label),
+			`flow html still has English UI label in the rendered default: ${label}`,
 		);
 	assert(!html.includes("application/json"), "html stores JSON state");
 	const singleDir = createFlow(cwd, "F2");
@@ -5639,7 +5651,7 @@ async function htmlScenario() {
 		"single-step criteria deviation did not use step-level wording",
 	);
 	assert(
-		!singleHtml.includes("最终验收"),
+		!withoutLanguageMetadata(singleHtml).includes("最终验收"),
 		"single-step criteria deviation mentioned final acceptance",
 	);
 	singleFlow.language = "en";
@@ -5648,14 +5660,15 @@ async function htmlScenario() {
 		writeFlowHtml(singleDir, singleFlow),
 		"utf8",
 	);
+	const singleEnglishRendered = withoutLanguageMetadata(singleEnglishHtml);
 	assert(
-		singleEnglishHtml.includes("recorded in this step's checks") &&
-			singleEnglishHtml.includes("All complete · 1 step") &&
-			singleEnglishHtml.includes("Delivery details") &&
-			singleEnglishHtml.includes(">Criteria</p>") &&
-			singleEnglishHtml.includes(">1 item</span>") &&
-			!singleEnglishHtml.includes("Final handoff") &&
-			!singleEnglishHtml.includes("final acceptance"),
+		singleEnglishRendered.includes("recorded in this step's checks") &&
+			singleEnglishRendered.includes("All complete · 1 step") &&
+			singleEnglishRendered.includes("Delivery details") &&
+			singleEnglishRendered.includes(">Criteria</p>") &&
+			singleEnglishRendered.includes(">1 item</span>") &&
+			!singleEnglishRendered.includes("Final handoff") &&
+			!singleEnglishRendered.includes("final acceptance"),
 		"English completion copy or single-step criteria wording regressed",
 	);
 	const errorHtml = readFileSync(
@@ -5669,9 +5682,9 @@ async function htmlScenario() {
 	assert(errorHtml.includes("Flow 校验错误"), "error html title not Chinese");
 	assert(errorHtml.includes("原始需求"), "error html source label not Chinese");
 	assert(
-		!errorHtml.includes("flow validation error") &&
-			!errorHtml.includes("original request"),
-		"error html still has English UI labels",
+		!withoutLanguageMetadata(errorHtml).includes("flow validation error") &&
+			!withoutLanguageMetadata(errorHtml).includes("original request"),
+		"error html still has English UI labels in the rendered default",
 	);
 }
 
@@ -5772,7 +5785,7 @@ async function flowConversationContextEvidenceScenario() {
 	const errorReport = readFileSync(join(dir, "flow.html"), "utf8");
 	assert(
 		report.includes("data-report-transcript") &&
-			report.includes('<time datetime="2026-01-01T00:00:00.000Z"') &&
+			report.includes('datetime="2026-01-01T00:00:00.000Z"') &&
 			report.includes(literal),
 		"flow report did not render the structured conversation source",
 	);
@@ -13660,6 +13673,16 @@ function findFlowCard(state, title, message) {
 		`${message}: ${state.customMessages.map((item) => item.message.details?.title).join(" | ")}`,
 	);
 	return card;
+}
+
+function withoutLanguageMetadata(html) {
+	return html
+		.replace(
+			/<span data-ui-zh="[^"]*" data-ui-en="[^"]*">([^<]*)<\/span>/gu,
+			"$1",
+		)
+		.replace(/\sdata-ui-[\w-]+-(?:zh|en)="[^"]*"/gu, "")
+		.replace(/\sdata-report-title-(?:zh|en)="[^"]*"/gu, "");
 }
 
 function assertUniqueDataKeys(html) {

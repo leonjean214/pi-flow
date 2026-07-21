@@ -1,6 +1,5 @@
 import type { Language } from "./config.js";
-import { copy } from "./copy.js";
-import { localizeErrors } from "./error-language.js";
+import { copy, type ReportUiText, reportUiCopy, reportUiText } from "./copy.js";
 import { renderMarkdownBlock } from "./html-markdown.js";
 import { cleanReportCopy } from "./report-copy.js";
 import { reportHead } from "./report-html.js";
@@ -83,9 +82,32 @@ export function escapeHtmlLiteral(value: string) {
 		.replace(/"/g, "&quot;");
 }
 
+export function localizedText(value: ReportUiText, language: Language) {
+	return `<span data-ui-zh="${escapeHtml(value.zh)}" data-ui-en="${escapeHtml(value.en)}">${escapeHtml(value[language])}</span>`;
+}
+
+export function localizedAttribute(
+	name: string,
+	value: ReportUiText,
+	language: Language,
+) {
+	const marker = name.replace(/^data-/u, "");
+	return `${name}="${escapeHtml(value[language])}" data-ui-${marker}-zh="${escapeHtml(value.zh)}" data-ui-${marker}-en="${escapeHtml(value.en)}"`;
+}
+
 export function themeToggleButton(language: Language = "zh") {
-	const t = copy(language);
-	return `<button type="button" data-theme-toggle class="inline-flex h-10 w-10 shrink-0 items-center justify-center text-stone-600 dark:text-stone-300 ${PILL_INTERACTIVE}" aria-label="${escapeHtml(t.themeToDark)}" data-label-light="${escapeHtml(t.themeToLight)}" data-label-dark="${escapeHtml(t.themeToDark)}"><span class="dark:hidden">${reportIcon("moon", "h-4 w-4")}</span><span class="hidden dark:inline">${reportIcon("sun", "h-4 w-4")}</span></button>`;
+	const light = reportUiCopy("themeToLight");
+	const dark = reportUiCopy("themeToDark");
+	return `<button type="button" data-theme-toggle class="inline-flex h-10 w-10 shrink-0 items-center justify-center text-stone-600 dark:text-stone-300 ${PILL_INTERACTIVE}" ${localizedAttribute("aria-label", dark, language)} ${localizedAttribute("data-label-light", light, language)} ${localizedAttribute("data-label-dark", dark, language)}><span class="dark:hidden">${reportIcon("moon", "h-4 w-4")}</span><span class="hidden dark:inline">${reportIcon("sun", "h-4 w-4")}</span></button>`;
+}
+
+export function languageToggleButton(language: Language = "zh") {
+	const label = reportUiText("报告界面语言", "Report interface language");
+	return `<div data-language-toggle role="group" ${localizedAttribute("aria-label", label, language)} class="inline-flex h-10 items-center rounded-full bg-[var(--report-chip)] p-1 shadow-[0_0_0_1px_var(--ring-subtle),0_6px_14px_var(--shadow-chip)]"><button type="button" data-language-option="zh" aria-pressed="${language === "zh"}" class="h-8 rounded-full px-2.5 text-xs font-semibold text-stone-600 transition-colors hover:text-stone-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 dark:text-stone-300 dark:hover:text-stone-50 dark:focus-visible:ring-sky-700">中</button><span aria-hidden="true" class="text-stone-300 dark:text-stone-600">/</span><button type="button" data-language-option="en" aria-pressed="${language === "en"}" class="h-8 rounded-full px-2.5 text-xs font-semibold text-stone-600 transition-colors hover:text-stone-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 dark:text-stone-300 dark:hover:text-stone-50 dark:focus-visible:ring-sky-700">EN</button></div>`;
+}
+
+export function reportControls(language: Language = "zh") {
+	return `<div class="flex shrink-0 items-center gap-2">${languageToggleButton(language)}${themeToggleButton(language)}</div>`;
 }
 
 export function pageShell(
@@ -96,19 +118,21 @@ export function pageShell(
 		language?: Language;
 		themeToggle?: boolean;
 		bodyClass?: string;
+		title?: ReportUiText;
 	} = {},
 ) {
-	const t = copy(options.language ?? "zh");
+	const language = options.language ?? "zh";
+	const t = copy(language);
 	const themeToggle =
 		options.themeToggle === false
 			? ""
-			: `<div class="flex justify-end px-1 pb-1">${themeToggleButton(options.language ?? "zh")}</div>`;
+			: `<div class="flex justify-end px-1 pb-1">${reportControls(language)}</div>`;
 	return `<!doctype html>
-<html lang="${t.htmlLang}">
+<html lang="${t.htmlLang}" data-report-default-language="${language}" data-report-title-zh="${escapeHtml(options.title?.zh ?? title)}" data-report-title-en="${escapeHtml(options.title?.en ?? title)}">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeHtml(title)}</title>
+<title>${escapeHtml(options.title?.[language] ?? title)}</title>
 ${reportHead()}
 </head>
 <body class="bg-[var(--report-page)] text-[var(--report-text)] antialiased transition-colors duration-200 font-sans${options.bodyClass ? ` ${options.bodyClass}` : ""}">
@@ -128,17 +152,23 @@ export function card(body: string, options: { tone?: Tone; bg?: string } = {}) {
 
 export function modalTrigger(input: {
 	id: string;
-	label: string;
+	label: string | ReportUiText;
+	language?: Language;
 	icon?: ReportIconName;
 	className?: string;
 }) {
 	const icon = input.icon ? reportIcon(input.icon, "h-3.5 w-3.5") : "";
-	return `<button type="button" data-modal-open="${escapeHtml(input.id)}" class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium ${input.className ?? "text-stone-500 dark:text-stone-400"} ${PILL_INTERACTIVE}">${icon}<span>${escapeHtml(input.label)}</span></button>`;
+	const label =
+		typeof input.label === "string"
+			? escapeHtml(input.label)
+			: localizedText(input.label, input.language ?? "zh");
+	return `<button type="button" data-modal-open="${escapeHtml(input.id)}" class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium ${input.className ?? "text-stone-500 dark:text-stone-400"} ${PILL_INTERACTIVE}">${icon}<span>${label}</span></button>`;
 }
 
 export function hovercardTrigger(input: {
-	label: string;
-	tooltip: string;
+	label: string | ReportUiText;
+	tooltip: string | ReportUiText;
+	language?: Language;
 	icon?: ReportIconName;
 	side?: "top" | "left" | "right";
 	tone?: Tone;
@@ -147,13 +177,23 @@ export function hovercardTrigger(input: {
 	const icon = input.icon ? reportIcon(input.icon, "h-3.5 w-3.5") : "";
 	const tone = input.tone ?? "gray";
 	const extra = input.className ? ` ${input.className}` : "";
-	return `<span tabindex="0" data-hover-chip data-tooltip="${escapeHtml(input.tooltip)}" data-tooltip-side="${input.side ?? "top"}" data-tooltip-size="lg" class="${CHIP.soft} ${TONE[tone].soft} gap-1.5 px-3 py-1 text-xs font-medium${extra}">${icon}<span>${escapeHtml(input.label)}</span></span>`;
+	const language = input.language ?? "zh";
+	const tooltip =
+		typeof input.tooltip === "string"
+			? `data-tooltip="${escapeHtml(input.tooltip)}"`
+			: localizedAttribute("data-tooltip", input.tooltip, language);
+	const label =
+		typeof input.label === "string"
+			? escapeHtml(input.label)
+			: localizedText(input.label, language);
+	return `<span tabindex="0" data-hover-chip ${tooltip} data-tooltip-side="${input.side ?? "top"}" data-tooltip-size="lg" class="${CHIP.soft} ${TONE[tone].soft} gap-1.5 px-3 py-1 text-xs font-medium${extra}">${icon}<span>${label}</span></span>`;
 }
 
 /** 模型 token：中性底，状态色只在 icon。 */
 export function modelHoverChip(input: {
-	label: string;
-	tooltip: string;
+	label: string | ReportUiText;
+	tooltip: string | ReportUiText;
+	language?: Language;
 	iconHtml: string;
 	iconTone: Tone;
 	thinking?: string;
@@ -163,43 +203,68 @@ export function modelHoverChip(input: {
 	const thinking = input.thinking
 		? `<span class="text-[10px] font-normal text-stone-400/90 dark:text-stone-500">${escapeHtml(input.thinking)}</span>`
 		: "";
-	const tooltip = input.preserveTooltip
-		? escapeHtmlLiteral(input.tooltip)
-		: escapeHtml(input.tooltip);
-	return `<span tabindex="0" data-model-chip data-hover-chip data-tooltip="${tooltip}" data-tooltip-side="${input.side ?? "auto"}" data-tooltip-size="lg" class="${CHIP.neutral} gap-1 px-2 py-1 ${TYPE.meta} font-medium tracking-[-0.01em]"><span class="${TONE[input.iconTone].text}">${input.iconHtml}</span><span class="max-w-[9.5rem] truncate">${escapeHtml(input.label)}</span>${thinking}</span>`;
+	const tooltip =
+		typeof input.tooltip === "string"
+			? `data-tooltip="${input.preserveTooltip ? escapeHtmlLiteral(input.tooltip) : escapeHtml(input.tooltip)}"`
+			: localizedAttribute(
+					"data-tooltip",
+					input.tooltip,
+					input.language ?? "zh",
+				);
+	const label =
+		typeof input.label === "string"
+			? escapeHtml(input.label)
+			: localizedText(input.label, input.language ?? "zh");
+	return `<span tabindex="0" data-model-chip data-hover-chip ${tooltip} data-tooltip-side="${input.side ?? "auto"}" data-tooltip-size="lg" class="${CHIP.neutral} gap-1 px-2 py-1 ${TYPE.meta} font-medium tracking-[-0.01em]"><span class="${TONE[input.iconTone].text}">${input.iconHtml}</span><span class="max-w-[9.5rem] truncate">${label}</span>${thinking}</span>`;
 }
 
 /** 标题旁小 ? 提示。 */
-export function hintMark(hint: string) {
-	return `<span tabindex="0" aria-label="${escapeHtml(hint)}" data-tooltip="${escapeHtml(hint)}" class="tooltip inline-grid h-3 w-3 shrink-0 cursor-pointer place-items-center rounded-full bg-[var(--report-surface-muted)] text-[8px] font-semibold text-stone-500 dark:text-stone-400 ${INSET_RING} transition-[color,background-color,box-shadow] duration-150 hover:bg-[var(--report-chip-hover)] hover:text-stone-900 dark:hover:text-stone-100 ${FOCUS}">?</span>`;
+export function hintMark(
+	hint: string | ReportUiText,
+	language: Language = "zh",
+) {
+	const attrs =
+		typeof hint === "string"
+			? `aria-label="${escapeHtml(hint)}" data-tooltip="${escapeHtml(hint)}"`
+			: `${localizedAttribute("aria-label", hint, language)} ${localizedAttribute("data-tooltip", hint, language)}`;
+	return `<span tabindex="0" ${attrs} class="tooltip inline-grid h-3 w-3 shrink-0 cursor-pointer place-items-center rounded-full bg-[var(--report-surface-muted)] text-[8px] font-semibold text-stone-500 dark:text-stone-400 ${INSET_RING} transition-[color,background-color,box-shadow] duration-150 hover:bg-[var(--report-chip-hover)] hover:text-stone-900 dark:hover:text-stone-100 ${FOCUS}">?</span>`;
 }
 
 export function modal(input: {
 	id: string;
-	title?: string;
-	ariaLabel?: string;
+	title?: string | ReportUiText;
+	ariaLabel?: string | ReportUiText;
 	icon?: ReportIconName;
 	tone?: Tone;
 	body: string;
 	language?: Language;
 	dataKey?: string;
 }) {
+	const language = input.language ?? "zh";
 	const hasTitle = Boolean(input.title);
 	const icon =
 		hasTitle && input.icon
 			? `<span class="${TONE[input.tone ?? "gray"].text}">${reportIcon(input.icon, "h-5 w-5")}</span>`
 			: "";
-	const closeLabel = (input.language ?? "zh") === "en" ? "Close" : "关闭";
+	const closeLabel = reportUiText("关闭", "Close");
 	const label = input.ariaLabel ?? input.title;
-	const aria = label ? ` aria-label="${escapeHtml(label)}"` : "";
+	const aria = label
+		? ` ${typeof label === "string" ? `aria-label="${escapeHtml(label)}"` : localizedAttribute("aria-label", label, language)}`
+		: "";
+	const title =
+		typeof input.title === "string"
+			? escapeHtml(input.title)
+			: input.title
+				? localizedText(input.title, language)
+				: "";
 	const heading = hasTitle
-		? `<div class="inline-flex min-w-0 items-center gap-2">${icon}<p class="truncate text-base font-semibold text-stone-900 dark:text-stone-100">${escapeHtml(input.title ?? "")}</p></div>`
+		? `<div class="inline-flex min-w-0 items-center gap-2">${icon}<p class="truncate text-base font-semibold text-stone-900 dark:text-stone-100">${title}</p></div>`
 		: "";
 	return `<dialog id="${escapeHtml(input.id)}"${aria}${input.dataKey ? ` data-key="${escapeHtml(input.dataKey)}"` : ""}>
 <div data-modal-shell data-rough-card class="flex max-h-[82dvh] flex-col bg-[var(--report-surface)] shadow-[0_24px_80px_var(--shadow-chip)]">
 <header class="flex shrink-0 items-center ${hasTitle ? "justify-between" : "justify-end"} gap-3 px-6 pt-5">
 ${heading}
-<button type="button" data-modal-close aria-label="${closeLabel}" class="grid h-8 w-8 shrink-0 place-items-center text-stone-500 dark:text-stone-400 ${PILL_INTERACTIVE}">${reportIcon("x", "h-3.5 w-3.5")}</button>
+<button type="button" data-modal-close ${localizedAttribute("aria-label", closeLabel, language)} class="grid h-8 w-8 shrink-0 place-items-center text-stone-500 dark:text-stone-400 ${PILL_INTERACTIVE}">${reportIcon("x", "h-3.5 w-3.5")}</button>
 </header>
 <div class="min-h-0 overflow-y-auto px-6 pb-8 pt-4">${input.body}</div>
 </div>
@@ -219,8 +284,14 @@ export function seal(
 	return `<span data-rough-seal data-tone="${tone}" class="inline-flex shrink-0 items-center gap-1 px-2.5 py-0.5 text-xs font-medium ${TONE[tone].sealBg} ${TONE[tone].text}">${iconHtml}${escapeHtml(text)}</span>`;
 }
 
-export function statusText(text: string, tone: Tone) {
-	return `<span class="shrink-0 text-xs font-medium ${TONE[tone].text}">${escapeHtml(text)}</span>`;
+export function statusText(
+	text: string | ReportUiText,
+	tone: Tone,
+	language: Language = "zh",
+) {
+	const body =
+		typeof text === "string" ? escapeHtml(text) : localizedText(text, language);
+	return `<span class="shrink-0 text-xs font-medium ${TONE[tone].text}">${body}</span>`;
 }
 
 function toneIcon(tone: Tone) {
@@ -232,8 +303,13 @@ function toneIcon(tone: Tone) {
 	return "";
 }
 
-export function sectionTitle(text: string) {
-	return `<p class="${TYPE.meta} font-semibold uppercase tracking-[0.18em] text-stone-400 dark:text-stone-500">${escapeHtml(text)}</p>`;
+export function sectionTitle(
+	text: string | ReportUiText,
+	language: Language = "zh",
+) {
+	const body =
+		typeof text === "string" ? escapeHtml(text) : localizedText(text, language);
+	return `<p class="${TYPE.meta} font-semibold uppercase tracking-[0.18em] text-stone-400 dark:text-stone-500">${body}</p>`;
 }
 
 export function progressRing(percent: number, tone: Tone) {
@@ -250,35 +326,35 @@ export function modelWithThinking(label: string, thinking?: string) {
 	return `<span class="font-mono">${escapeHtml(label)}</span>${suffix}`;
 }
 
-export function subSection(label: string, markdown: string) {
-	return `<div>${sectionTitle(label)}${renderMarkdownBlock(markdown, "mt-2 space-y-2 text-sm leading-6 text-stone-700 dark:text-stone-300")}</div>`;
+export function subSection(
+	label: string,
+	markdown: string,
+	language: Language = "zh",
+) {
+	return `<div>${sectionTitle(label)}${renderMarkdownBlock(markdown, "mt-2 space-y-2 text-sm leading-6 text-stone-700 dark:text-stone-300", language)}</div>`;
 }
 
 export function errorCard(errors: string[], language: Language = "zh") {
-	return `<section data-rough-card data-tone="red" class="bg-[var(--tone-red-surface)] p-5"><p class="text-sm font-semibold text-rose-900 dark:text-rose-200">${escapeHtml(copy(language).validationErrors)}</p><ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-rose-800 dark:text-rose-300">${localizeErrors(
-		errors,
-		language,
-	)
-		.map((error) => `<li>${escapeHtml(error)}</li>`)
+	return `<section data-rough-card data-tone="red" class="bg-[var(--tone-red-surface)] p-5"><p class="text-sm font-semibold text-rose-900 dark:text-rose-200">${localizedText(reportUiCopy("validationErrors"), language)}</p><ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-rose-800 dark:text-rose-300">${errors
+		.map((error) => `<li>${escapeHtmlLiteral(error)}</li>`)
 		.join("")}</ul></section>`;
 }
 
 export function errorPage(input: {
 	pageTitle: string;
-	kindLabel: string;
+	kindLabel: string | ReportUiText;
 	title: string;
 	errors: string[];
 	requestText?: string;
 	language?: Language;
 }) {
-	const t = copy(input.language ?? "zh");
 	return pageShell(
 		input.pageTitle,
 		[
-			`<header data-rough-card data-tone="red" class="bg-[var(--report-surface)] p-6"><p class="${TYPE.meta} font-semibold uppercase tracking-[0.18em] text-rose-600 dark:text-rose-400">${escapeHtml(input.kindLabel)}</p><h1 class="mt-2 font-serif text-3xl leading-snug text-stone-900 dark:text-stone-100">${escapeHtml(input.title)}</h1></header>`,
+			`<header data-rough-card data-tone="red" class="bg-[var(--report-surface)] p-6"><p class="${TYPE.meta} font-semibold uppercase tracking-[0.18em] text-rose-600 dark:text-rose-400">${typeof input.kindLabel === "string" ? escapeHtml(input.kindLabel) : localizedText(input.kindLabel, input.language ?? "zh")}</p><h1 class="mt-2 font-serif text-3xl leading-snug text-stone-900 dark:text-stone-100">${escapeHtml(input.title)}</h1></header>`,
 			errorCard(input.errors, input.language),
 			card(
-				`${sectionTitle(t.request)}<p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-stone-700 dark:text-stone-300">${escapeHtml(input.requestText ?? "")}</p>`,
+				`${sectionTitle(reportUiCopy("request"), input.language ?? "zh")}<p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-stone-700 dark:text-stone-300">${escapeHtml(input.requestText ?? "")}</p>`,
 			),
 		].join("\n"),
 		{ language: input.language },

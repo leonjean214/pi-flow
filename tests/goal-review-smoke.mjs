@@ -1089,7 +1089,9 @@ async function flowAcceptanceAdvisorConsultScenario() {
 	);
 	const html = renderFlowHtml(join(cwd, ".flow", "F1"), readFlow(cwd));
 	assert(
-		html.includes("顾问建议 ·") &&
+		html.includes(
+			'data-ui-zh="顾问建议" data-ui-en="Advisor advice">顾问建议</span> ·',
+		) &&
 			html.includes('data-tooltip-size="lg"') &&
 			html.includes("根因结论：当前路径") &&
 			html.includes("advice-tail-preserved") &&

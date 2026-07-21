@@ -1,10 +1,11 @@
 import type { CheckboxAttribution } from "../flow/types.js";
 import type { PlanStep } from "../plan/view.js";
 import type { Language } from "./config.js";
-import { copy } from "./copy.js";
+import { type ReportUiText, reportUiCopy } from "./copy.js";
 import { inline } from "./html-markdown.js";
 import {
 	escapeHtml,
+	localizedText,
 	modelWithThinking,
 	TONE,
 	type Tone,
@@ -56,7 +57,7 @@ function stepRow(
 	options: StepListOptions,
 ) {
 	const isCurrent = index === currentIndex;
-	const state = stepState(step, index, options.language ?? "zh");
+	const state = stepState(step, index);
 	const connector = isLast
 		? ""
 		: `<span data-rough-line data-vertical data-tone="${step.done ? "green" : "gray"}" class="absolute bottom-0 left-[17px] top-11 w-1"></span>`;
@@ -66,22 +67,29 @@ ${connector}
 <div data-step-row data-step-index="${index}" class="flex min-w-0 gap-4">
 <span data-rough-node data-tone="${state.tone}" class="grid h-9 w-9 shrink-0 place-items-center text-xs font-bold ${TONE[state.tone].text}">${stepGlyph(state.glyph)}</span>
 <div data-step-copy class="min-w-0 flex-1 pt-1.5">
-<p class="flex flex-wrap items-center gap-2 text-sm font-semibold leading-5 ${isCurrent ? "text-stone-900 dark:text-stone-100" : "text-stone-700 dark:text-stone-300"}"><span>${inline(step.title)}</span>${stateBadge(state.label, state.tone)}${attributionText(options.attributions?.[index])}</p>
+<p class="flex flex-wrap items-center gap-2 text-sm font-semibold leading-5 ${isCurrent ? "text-stone-900 dark:text-stone-100" : "text-stone-700 dark:text-stone-300"}"><span>${inline(step.title)}</span>${stateBadge(state.label, state.tone, options.language ?? "zh")}${attributionText(options.attributions?.[index])}</p>
 ${detail}
 </div>
 </div>
 </li>`;
 }
 
-function stepState(step: PlanStep, index: number, language: Language) {
-	const t = copy(language);
+function stepState(step: PlanStep, index: number) {
 	if (step.status === "done")
-		return { glyph: "✓", label: t.done, tone: "green" as Tone };
+		return { glyph: "✓", label: reportUiCopy("done"), tone: "green" as Tone };
 	if (step.status === "active")
-		return { glyph: "…", label: t.active, tone: "blue" as Tone };
+		return { glyph: "…", label: reportUiCopy("active"), tone: "blue" as Tone };
 	if (step.status === "blocked")
-		return { glyph: "!", label: t.blocked, tone: "amber" as Tone };
-	return { glyph: String(index + 1), label: t.todo, tone: "gray" as Tone };
+		return {
+			glyph: "!",
+			label: reportUiCopy("blocked"),
+			tone: "amber" as Tone,
+		};
+	return {
+		glyph: String(index + 1),
+		label: reportUiCopy("todo"),
+		tone: "gray" as Tone,
+	};
 }
 
 function stepGlyph(glyph: string) {
@@ -91,16 +99,16 @@ function stepGlyph(glyph: string) {
 	return glyph;
 }
 
-function stateBadge(label: string, tone: Tone) {
+function stateBadge(label: ReportUiText, tone: Tone, language: Language) {
 	if (tone === "green" || tone === "gray") return "";
-	return `<span class="${TYPE.meta} font-medium ${TONE[tone].text}">${label}</span>`;
+	return `<span class="${TYPE.meta} font-medium ${TONE[tone].text}">${localizedText(label, language)}</span>`;
 }
 
 /** 勾级归因行内文字：🧠 模型 强度：时间；轻于标题两个层级。 */
 function attributionText(attribution: CheckboxAttribution | undefined) {
 	if (!attribution) return "";
 	const time = new Date(attribution.at);
-	const body = `${modelWithThinking(shortModel(attribution.model), attribution.thinking)}<span class="text-stone-300 dark:text-stone-600">：</span><time datetime="${escapeHtml(time.toISOString())}" class="tabular-nums">${escapeHtml(attributionTime(time))}</time>`;
+	const body = `${modelWithThinking(shortModel(attribution.model), attribution.thinking)}<span class="text-stone-300 dark:text-stone-600">：</span><time data-localized-time datetime="${escapeHtml(time.toISOString())}" class="tabular-nums">${escapeHtml(attributionTime(time))}</time>`;
 	return `<span class="inline-flex shrink-0 items-center gap-1 text-[10.5px] font-normal leading-none text-stone-400 dark:text-stone-500"><span class="text-indigo-400/70 dark:text-indigo-300/50">${reportIcon("brain", "h-3 w-3")}</span>${body}</span>`;
 }
 

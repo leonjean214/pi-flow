@@ -8,7 +8,12 @@ import {
 } from "../plan/markdown.js";
 import { parseSteps } from "../plan/view.js";
 import { advisorConsultModel, readFlowConfig } from "../shared/config.js";
-import { copy } from "../shared/copy.js";
+import {
+	copy,
+	type ReportUiText,
+	reportUiCopy,
+	reportUiText,
+} from "../shared/copy.js";
 import { readAlignmentStateIfExists } from "../shared/generation-state.js";
 import { clipText, renderMarkdownBlock } from "../shared/html-markdown.js";
 import {
@@ -17,18 +22,20 @@ import {
 	errorPage,
 	escapeHtml,
 	hovercardTrigger,
+	localizedAttribute,
+	localizedText,
 	modal,
 	modalTrigger,
 	modelHoverChip,
 	modelWithThinking,
 	pageShell,
 	progressRing,
+	reportControls,
 	sectionTitle,
 	statusText,
 	TONE,
 	type Tone,
 	TYPE,
-	themeToggleButton,
 } from "../shared/report-blocks.js";
 import { notifyReportChanged } from "../shared/report-client.js";
 import {
@@ -131,8 +138,7 @@ export function writeFlowErrorHtml(
 		htmlPath,
 		errorPage({
 			pageTitle: `Flow — ${input.title}`,
-			kindLabel:
-				input.language === "en" ? "Flow validation errors" : "Flow 校验错误",
+			kindLabel: reportUiText("Flow 校验错误", "Flow validation errors"),
 			...input,
 		}),
 	);
@@ -208,13 +214,12 @@ ${attention}${paused}
 /** 生成侧元信息与 Flow 起止时刻。 */
 function metaLine(flow: FlowState) {
 	const meta = flow.meta;
-	const en = flow.language === "en";
 	const items: string[] = [];
 	const timing = flowTimingMeta(flow);
 	if (timing) items.push(timing);
 	if (meta?.plannedBy)
 		items.push(
-			`<span class="inline-flex items-center gap-1.5"><span class="text-indigo-600/80 dark:text-indigo-300/80">${reportIcon("bot", "h-3.5 w-3.5")}</span>${en ? "Plan" : "计划"} ${modelWithThinking(shortModel(meta.plannedBy.model), meta.plannedBy.thinking)}</span>`,
+			`<span class="inline-flex items-center gap-1.5"><span class="text-indigo-600/80 dark:text-indigo-300/80">${reportIcon("bot", "h-3.5 w-3.5")}</span>${localizedText(reportUiText("计划", "Plan"), flow.language)} ${modelWithThinking(shortModel(meta.plannedBy.model), meta.plannedBy.thinking)}</span>`,
 		);
 	const alignment = alignmentMeta(meta?.alignment ?? null, flow.language);
 	if (alignment) items.push(alignment);
@@ -224,18 +229,17 @@ function metaLine(flow: FlowState) {
 
 function flowTimingMeta(flow: FlowState) {
 	if (flow.startedAt === null) return "";
-	const en = flow.language === "en";
 	const start = reportTime(flow.startedAt, flow.language);
 	const completed =
 		flow.completedAt === null
 			? ""
-			: ` <span class="text-stone-300 dark:text-stone-600">·</span> ${en ? "Completed at" : "完成于"} ${reportTime(flow.completedAt, flow.language)}`;
-	return `<span data-flow-timing class="inline-flex items-center gap-1 tabular-nums">${en ? "Started at" : "开始于"} ${start}${completed}</span>`;
+			: ` <span class="text-stone-300 dark:text-stone-600">·</span> ${localizedText(reportUiText("完成于", "Completed at"), flow.language)} ${reportTime(flow.completedAt, flow.language)}`;
+	return `<span data-flow-timing class="inline-flex items-center gap-1 tabular-nums">${localizedText(reportUiText("开始于", "Started at"), flow.language)} ${start}${completed}</span>`;
 }
 
 function reportTime(timestamp: number, language: FlowState["language"]) {
 	const date = new Date(timestamp);
-	return `<time datetime="${date.toISOString()}">${escapeHtml(date.toLocaleString(copy(language).htmlLang))}</time>`;
+	return `<time data-localized-time datetime="${date.toISOString()}">${escapeHtml(date.toLocaleString(copy(language).htmlLang))}</time>`;
 }
 
 function reportTimeText(timestamp: number, language: FlowState["language"]) {
@@ -247,11 +251,12 @@ function alignmentMeta(
 	language: FlowState["language"],
 ) {
 	if (!alignment) return "";
-	const en = language === "en";
 	return modelHoverChip({
-		label: en
-			? `Aligned ${alignment.turns.length} rounds`
-			: `对齐 ${alignment.turns.length} 轮`,
+		label: reportUiText(
+			`对齐 ${alignment.turns.length} 轮`,
+			`Aligned ${alignment.turns.length} rounds`,
+		),
+		language,
 		tooltip: alignmentTooltip(alignment.turns),
 		iconHtml: reportIcon("chat", "h-3 w-3"),
 		iconTone: "blue",
@@ -292,11 +297,10 @@ const ATTENTION_TITLES: Record<
 function attentionBlock(flow: FlowState) {
 	const attention = flow.attention;
 	if (!attention) return "";
-	const en = flow.language === "en";
-	const title = ATTENTION_TITLES[attention.kind][en ? "en" : "zh"];
+	const title = ATTENTION_TITLES[attention.kind];
 	const command = `/flow go ${flowCommandId(flow.id)}`;
 	return `<div class="mt-5 border-t border-dashed border-rose-300/70 dark:border-rose-400/30 pt-4 text-center">
-<p class="inline-flex items-center gap-2 text-lg font-bold text-rose-900 dark:text-rose-200"><span class="text-rose-600 dark:text-rose-300">${reportIcon("warning-circle", "h-5 w-5")}</span>${escapeHtml(title)}</p>
+<p class="inline-flex items-center gap-2 text-lg font-bold text-rose-900 dark:text-rose-200"><span class="text-rose-600 dark:text-rose-300">${reportIcon("warning-circle", "h-5 w-5")}</span>${localizedText(title, flow.language)}</p>
 <p class="mt-1 text-[12.5px] leading-5 text-rose-800/85 dark:text-rose-200/75">${escapeHtml(clipText(attention.message, 300))}</p>
 <p class="mt-2.5">${commandChip(command, "play", flow.language, true)}</p>
 </div>`;
@@ -304,10 +308,9 @@ function attentionBlock(flow: FlowState) {
 
 /** 用户主动暂停：琥珀平静态一行，不染页不变卡。 */
 function pausedBlock(flow: FlowState) {
-	const en = flow.language === "en";
 	const command = `/flow go ${flowCommandId(flow.id)}`;
 	return `<div class="mt-5 border-t border-dashed border-amber-300/70 dark:border-amber-400/30 pt-4 text-center">
-<p class="inline-flex flex-wrap items-center justify-center gap-2 text-[13px] font-medium text-amber-800 dark:text-amber-300"><span>${reportIcon("pause", "h-4 w-4")}</span><span>${en ? "Paused" : "已暂停"}</span><span class="text-amber-700/60 dark:text-amber-400/60">·</span>${commandChip(command, "play", flow.language, true)}<span>${en ? "to continue" : "继续"}</span></p>
+<p class="inline-flex flex-wrap items-center justify-center gap-2 text-[13px] font-medium text-amber-800 dark:text-amber-300"><span>${reportIcon("pause", "h-4 w-4")}</span><span>${localizedText(reportUiText("已暂停", "Paused"), flow.language)}</span><span class="text-amber-700/60 dark:text-amber-400/60">·</span>${commandChip(command, "play", flow.language, true)}<span>${localizedText(reportUiText("继续", "to continue"), flow.language)}</span></p>
 </div>`;
 }
 
@@ -321,7 +324,7 @@ function brandHeader(language: FlowState["language"]) {
 <span class="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--report-surface)] p-1 shadow-[0_0_0_1px_var(--ring-subtle),0_10px_24px_var(--shadow-chip)]">${mark}</span>
 <span class="font-serif text-3xl font-semibold tracking-[-0.055em] text-stone-950 dark:text-stone-50">Flow</span>
 </div>
-${themeToggleButton(language)}
+${reportControls(language)}
 </div>`;
 }
 
@@ -340,12 +343,11 @@ function commandChip(
 	language: FlowState["language"],
 	prominent = false,
 ) {
-	const en = language === "en";
 	const shadow = prominent ? " shadow-[0_0_0_1px_var(--ring-subtle)]" : "";
 	return `<span class="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--report-surface-soft)] pl-2.5 pr-0.5${shadow}">
 <span class="text-stone-500 dark:text-stone-400">${reportIcon(icon, "h-3 w-3")}</span>
 <code class="font-mono ${TYPE.micro} leading-none text-stone-700 dark:text-stone-300">${escapeHtml(quoteCommand(command))}</code>
-<button type="button" data-copy-command="${escapeHtml(command)}" data-copy-success="${en ? "Copied" : "已复制"}" data-copy-failure="${en ? "Copy failed" : "复制失败"}" aria-label="${escapeHtml(en ? `Copy ${command}` : `复制 ${command}`)}" class="relative ml-0.5 inline-grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-full text-stone-400 transition-[color,background-color,transform] duration-150 hover:bg-[var(--report-chip-hover)] hover:text-stone-700 dark:hover:text-stone-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 dark:focus-visible:ring-sky-700 active:scale-[0.94]"><span data-copy-icon>${reportIcon("copy", "h-3 w-3")}</span><span data-copy-check class="hidden text-emerald-700 dark:text-emerald-300">${reportIcon("check", "h-3 w-3")}</span><span data-copy-feedback role="status" class="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-stone-900 px-2 py-1 text-[10px] font-medium text-white opacity-0 shadow-[0_6px_16px_var(--shadow-chip)] transition-[opacity,transform] duration-150"></span></button>
+<button type="button" data-copy-command="${escapeHtml(command)}" ${localizedAttribute("data-copy-success", reportUiText("已复制", "Copied"), language)} ${localizedAttribute("data-copy-failure", reportUiText("复制失败", "Copy failed"), language)} ${localizedAttribute("aria-label", reportUiText(`复制 ${command}`, `Copy ${command}`), language)} class="relative ml-0.5 inline-grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-full text-stone-400 transition-[color,background-color,transform] duration-150 hover:bg-[var(--report-chip-hover)] hover:text-stone-700 dark:hover:text-stone-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 dark:focus-visible:ring-sky-700 active:scale-[0.94]"><span data-copy-icon>${reportIcon("copy", "h-3 w-3")}</span><span data-copy-check class="hidden text-emerald-700 dark:text-emerald-300">${reportIcon("check", "h-3 w-3")}</span><span data-copy-feedback role="status" class="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-stone-900 px-2 py-1 text-[10px] font-medium text-white opacity-0 shadow-[0_6px_16px_var(--shadow-chip)] transition-[opacity,transform] duration-150"></span></button>
 </span>`;
 }
 
@@ -493,13 +495,17 @@ function goalGlyph(goal: FlowGoal, active: boolean) {
 
 function goalStatus(
 	language: FlowState["language"],
-): Record<string, { label: string; tone: Tone }> {
-	const t = copy(language);
+): Record<string, { label: string; uiLabel: ReportUiText; tone: Tone }> {
+	const state = (uiLabel: ReportUiText, tone: Tone) => ({
+		label: uiLabel[language],
+		uiLabel,
+		tone,
+	});
 	return {
-		pending: { label: t.pending, tone: "gray" },
-		running: { label: t.running, tone: "blue" },
-		paused: { label: t.paused, tone: "amber" },
-		complete: { label: t.completed, tone: "green" },
+		pending: state(reportUiCopy("pending"), "gray"),
+		running: state(reportUiCopy("running"), "blue"),
+		paused: state(reportUiCopy("paused"), "amber"),
+		complete: state(reportUiCopy("completed"), "green"),
 	};
 }
 
@@ -514,17 +520,27 @@ function goalDisplayStatus(
 ) {
 	const t = copy(flow.language);
 	if (isCurrent && goal.status !== "complete" && flow.errors.length > 0)
-		return { label: t.error, tone: "red" as Tone };
+		return {
+			label: t.error,
+			uiLabel: reportUiCopy("error"),
+			tone: "red" as Tone,
+		};
 	if (isCurrent && flow.status === "paused")
-		return { label: t.paused, tone: "amber" as Tone };
+		return {
+			label: t.paused,
+			uiLabel: reportUiCopy("paused"),
+			tone: "amber" as Tone,
+		};
 	if (isCurrent && flow.status === "running")
 		return {
 			label: flow.language === "en" ? "Current" : "当前",
+			uiLabel: reportUiText("当前", "Current"),
 			tone: "blue" as Tone,
 		};
 	return (
 		goalStatus(flow.language)[goal.status] ?? {
 			label: goal.status,
+			uiLabel: reportUiText(goal.status, goal.status),
 			tone: "gray" as Tone,
 		}
 	);
@@ -609,14 +625,10 @@ function parallelDivider() {
 function preDraftCard(flow: FlowState) {
 	const text =
 		flow.status === "generating"
-			? flow.language === "en"
-				? "Generating plan…"
-				: "计划生成中…"
-			: flow.language === "en"
-				? "Aligning before plan generation…"
-				: "生成计划前对齐中…";
+			? reportUiText("计划生成中…", "Generating plan…")
+			: reportUiText("生成计划前对齐中…", "Aligning before plan generation…");
 	return card(
-		`<p class="text-sm leading-6 text-stone-500 dark:text-stone-400">${escapeHtml(text)}</p>`,
+		`<p class="text-sm leading-6 text-stone-500 dark:text-stone-400">${localizedText(text, flow.language)}</p>`,
 	);
 }
 
@@ -642,10 +654,13 @@ function goalPanel(dir: string, goal: FlowGoal, flow: FlowState) {
 	const body = `<div data-goal-body class="mt-4 grid"><div class="min-w-0">${list}</div><aside data-goal-aside class="min-w-0 space-y-3">${criteria}${checks}</aside></div>`;
 	const more = moreTrigger(
 		flow.language,
-		goalMoreTooltip(markdown, goal, flow),
+		reportUiText(
+			goalMoreTooltip(markdown, goal, "zh"),
+			goalMoreTooltip(markdown, goal, "en"),
+		),
 	);
 	const statusPill = showGoalStatusPill(flow, isCurrent)
-		? `<div class="flex shrink-0 items-center gap-2">${goalStatusMark(goal, status)}</div>`
+		? `<div class="flex shrink-0 items-center gap-2">${goalStatusMark(goal, status, flow.language)}</div>`
 		: "";
 	const tone = goalPanelTone(goal, isCurrent, status.tone);
 	const attrs = `data-rough-card${tone ? ` data-tone="${tone}"` : ""} class="h-full bg-[var(--report-surface)] p-5"`;
@@ -671,50 +686,50 @@ function goalPanelTone(goal: FlowGoal, isCurrent: boolean, statusTone: Tone) {
 function goalStatusMark(
 	_goal: FlowGoal,
 	status: ReturnType<typeof goalDisplayStatus>,
+	language: FlowState["language"],
 ) {
-	return statusText(status.label, status.tone);
+	return statusText(status.uiLabel, status.tone, language);
 }
 
 function showGoalStatusPill(flow: FlowState, isCurrent: boolean) {
 	return !(isCurrent && flow.status === "running" && flow.errors.length === 0);
 }
 
-function moreLabel(language: FlowState["language"]) {
-	return language === "en" ? "More" : "更多";
-}
-
-function moreTrigger(language: FlowState["language"], tooltip: string) {
+function moreTrigger(language: FlowState["language"], tooltip: ReportUiText) {
 	return hovercardTrigger({
-		label: moreLabel(language),
+		label: reportUiText("更多", "More"),
 		tooltip,
+		language,
 		icon: "dots-three",
 		side: "left",
 	});
 }
 
-function goalMoreTooltip(markdown: string, goal: FlowGoal, flow: FlowState) {
-	const t = copy(flow.language);
+function goalMoreTooltip(
+	markdown: string,
+	goal: FlowGoal,
+	language: FlowState["language"],
+) {
+	const t = copy(language);
 	const session = goal.sessionFile
-		? goal.sessionName || (flow.language === "en" ? "Started" : "已启动")
-		: flow.language === "en"
+		? goal.sessionName || (language === "en" ? "Started" : "已启动")
+		: language === "en"
 			? "Not started"
 			: "尚未启动";
 	return [
 		[t.scope, planSection(markdown, "Scope")],
 		[t.verification, verificationText(markdown).trim()],
-		[flow.language === "en" ? "Plan file" : "计划文件", goal.file],
-		[flow.language === "en" ? "Session" : "运行记录", session],
+		[language === "en" ? "Plan file" : "计划文件", goal.file],
+		[language === "en" ? "Session" : "运行记录", session],
 		[
-			flow.language === "en" ? "Started at" : "开始于",
-			goal.startedAt === null
-				? ""
-				: reportTimeText(goal.startedAt, flow.language),
+			language === "en" ? "Started at" : "开始于",
+			goal.startedAt === null ? "" : reportTimeText(goal.startedAt, language),
 		],
 		[
-			flow.language === "en" ? "Completed at" : "完成于",
+			language === "en" ? "Completed at" : "完成于",
 			goal.completedAt === null
 				? ""
-				: reportTimeText(goal.completedAt, flow.language),
+				: reportTimeText(goal.completedAt, language),
 		],
 	]
 		.filter(([, value]) => value.trim())
@@ -733,14 +748,15 @@ function successCriteriaCard(
 	const itemCount = [...criteria.matchAll(/^\s*[-*]\s+/gmu)].length;
 	const count =
 		itemCount === 0
-			? ""
-			: language === "en"
-				? `${itemCount} item${itemCount === 1 ? "" : "s"}`
-				: `${itemCount} 项`;
-	const title = language === "en" ? "Criteria" : "标准";
+			? undefined
+			: reportUiText(
+					`${itemCount} 项`,
+					`${itemCount} item${itemCount === 1 ? "" : "s"}`,
+				);
+	const title = reportUiText("标准", "Criteria");
 	return `<section data-success-criteria data-rough-card data-tone="blue" class="min-w-0 bg-[var(--report-surface-soft)] p-4">
-<div data-criteria-header><div data-criteria-title><span data-criteria-icon>${reportIcon("list-checks", "h-5 w-5")}</span><p data-criteria-title-text>${title}</p></div>${count ? `<span data-criteria-count>${count}</span>` : ""}</div>
-<div data-criteria-list>${renderMarkdownBlock(criteria, "")}</div>
+<div data-criteria-header><div data-criteria-title><span data-criteria-icon>${reportIcon("list-checks", "h-5 w-5")}</span><p data-criteria-title-text>${localizedText(title, language)}</p></div>${count ? `<span data-criteria-count>${localizedText(count, language)}</span>` : ""}</div>
+<div data-criteria-list>${renderMarkdownBlock(criteria, "", language)}</div>
 </section>`;
 }
 
@@ -788,14 +804,12 @@ function advisorDisplayModel() {
 }
 
 function checksPassedChip(goal: FlowGoal, language: FlowState["language"]) {
-	return `<div data-rough-card data-tone="green" class="bg-[var(--tone-green-surface)] p-4"><span${goal.result.summary ? ` title="${escapeHtml(clipText(goal.result.summary, 200))}"` : ""} class="inline-flex items-center gap-1 text-xs font-medium text-emerald-800 dark:text-emerald-300">${reportIcon("check-circle", "h-4 w-4")} ${language === "en" ? "Checks passed" : "检查通过"}</span></div>`;
+	return `<div data-rough-card data-tone="green" class="bg-[var(--tone-green-surface)] p-4"><span${goal.result.summary ? ` title="${escapeHtml(clipText(goal.result.summary, 200))}"` : ""} class="inline-flex items-center gap-1 text-xs font-medium text-emerald-800 dark:text-emerald-300">${reportIcon("check-circle", "h-4 w-4")} ${localizedText(reportUiText("检查通过", "Checks passed"), language)}</span></div>`;
 }
 
 // ---------------------------------------------------------------- completion
 
 function completionCard(flow: FlowState) {
-	const en = flow.language === "en";
-	const t = copy(flow.language);
 	const finalGoal = flow.goals.at(-1);
 	const deviation = flow.goals.some((goal) => goal.result.criteriaChanged);
 	const finalAcceptance = hasFinalAcceptance(flow);
@@ -803,33 +817,36 @@ function completionCard(flow: FlowState) {
 		? renderMarkdownBlock(
 				clipText(finalGoal.result.summary, 600),
 				"mt-3 space-y-2 text-sm leading-6 text-emerald-900 dark:text-emerald-200",
+				flow.language,
 			)
 		: "";
 	const deviationText = deviation
-		? completionDeviationText(flow.language, finalAcceptance)
-		: en
-			? "All steps passed checks with no acceptance deviation"
-			: "全部步骤通过检查，无验收偏差";
+		? completionDeviationText(finalAcceptance)
+		: reportUiText(
+				"全部步骤通过检查，无验收偏差",
+				"All steps passed checks with no acceptance deviation",
+			);
 	const detailsButton = finalGoal?.result.handoff
-		? `<div class="mt-4 flex justify-end"><button type="button" data-modal-open="dlg-delivery-details" class="inline-flex items-center gap-1.5 rounded-md px-1 py-1 text-xs font-medium text-emerald-800 underline-offset-4 transition-colors hover:text-emerald-950 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 dark:text-emerald-300 dark:hover:text-emerald-100 dark:focus-visible:ring-sky-700"><span>${escapeHtml(t.deliveryDetails)}</span>${reportIcon("arrow-right", "h-3.5 w-3.5")}</button></div>`
+		? `<div class="mt-4 flex justify-end"><button type="button" data-modal-open="dlg-delivery-details" class="inline-flex items-center gap-1.5 rounded-md px-1 py-1 text-xs font-medium text-emerald-800 underline-offset-4 transition-colors hover:text-emerald-950 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 dark:text-emerald-300 dark:hover:text-emerald-100 dark:focus-visible:ring-sky-700"><span>${localizedText(reportUiCopy("deliveryDetails"), flow.language)}</span>${reportIcon("arrow-right", "h-3.5 w-3.5")}</button></div>`
 		: "";
 	const detailsModal = finalGoal?.result.handoff
 		? modal({
 				id: "dlg-delivery-details",
-				title: t.deliveryDetails,
+				title: reportUiCopy("deliveryDetails"),
 				icon: "arrow-right",
 				tone: "green",
 				body: renderMarkdownBlock(
 					clipText(finalGoal.result.handoff, 4000),
 					"space-y-2 text-sm leading-6 text-stone-700 dark:text-stone-300",
+					flow.language,
 				),
 				language: flow.language,
 			})
 		: "";
 	return card(
-		`<p class="inline-flex items-center gap-2 text-base font-semibold text-emerald-900 dark:text-emerald-200">${reportIcon("seal-check", "h-5 w-5")}<span>${escapeHtml(t.completionTitle(flow.goals.length))}</span></p>
+		`<p class="inline-flex items-center gap-2 text-base font-semibold text-emerald-900 dark:text-emerald-200">${reportIcon("seal-check", "h-5 w-5")}<span>${localizedText(reportUiCopy("completionTitle", flow.goals.length), flow.language)}</span></p>
 ${summary}
-<p class="mt-2 text-xs text-emerald-800/75 dark:text-emerald-300/75">${escapeHtml(deviationText)}</p>
+<p class="mt-2 text-xs text-emerald-800/75 dark:text-emerald-300/75">${localizedText(deviationText, flow.language)}</p>
 ${suggestionsBlock(flow)}
 ${detailsButton}
 ${detailsModal}`,
@@ -839,7 +856,6 @@ ${detailsModal}`,
 
 /** 遗留建议：各步骤检查降级到建议区的非阻塞项，完成时一处收口给用户决策；零建议不渲染。 */
 function suggestionsBlock(flow: FlowState) {
-	const en = flow.language === "en";
 	const groups = flow.goals
 		.map((goal) => ({ goal, items: collectSuggestions(goal.checks) }))
 		.filter((group) => group.items.length > 0);
@@ -849,13 +865,13 @@ function suggestionsBlock(flow: FlowState) {
 		.flatMap((group) =>
 			group.items.map(
 				(item) =>
-					`<li class="flex gap-2 text-xs leading-5 text-stone-500 dark:text-stone-400"><span class="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-stone-300 dark:bg-stone-600"></span><span>${multi ? `<span class="font-medium text-stone-500 dark:text-stone-400">${en ? `Step ${group.goal.index + 1}` : `第 ${group.goal.index + 1} 步`}</span> · ` : ""}${escapeHtml(item)}</span></li>`,
+					`<li class="flex gap-2 text-xs leading-5 text-stone-500 dark:text-stone-400"><span class="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-stone-300 dark:bg-stone-600"></span><span>${multi ? `<span class="font-medium text-stone-500 dark:text-stone-400">${localizedText(reportUiText(`第 ${group.goal.index + 1} 步`, `Step ${group.goal.index + 1}`), flow.language)}</span> · ` : ""}${escapeHtml(item)}</span></li>`,
 			),
 		)
 		.join("");
-	const title = en ? "Remaining suggestions" : "遗留建议";
+	const title = reportUiText("遗留建议", "Remaining suggestions");
 	return `<div class="mt-4">
-<p class="text-[11px] font-semibold uppercase tracking-[0.04em] text-stone-400 dark:text-stone-500">${title}</p>
+<p class="text-[11px] font-semibold uppercase tracking-[0.04em] text-stone-400 dark:text-stone-500">${localizedText(title, flow.language)}</p>
 <ul class="mt-1.5 space-y-1">${rows}</ul>
 </div>`;
 }
@@ -864,24 +880,23 @@ function hasFinalAcceptance(flow: FlowState) {
 	return flow.goals.some((goal) => goal.role === "final_acceptance");
 }
 
-function completionDeviationText(
-	language: FlowState["language"],
-	finalAcceptance: boolean,
-) {
+function completionDeviationText(finalAcceptance: boolean) {
 	if (finalAcceptance)
-		return language === "en"
-			? "Acceptance criteria changed during execution and final acceptance reviewed it"
-			: "执行中有验收口径调整，最终验收已复核";
-	return language === "en"
-		? "Acceptance criteria changed during execution and was recorded in this step's checks"
-		: "执行中有验收口径调整，已在步骤检查中记录";
+		return reportUiText(
+			"执行中有验收口径调整，最终验收已复核",
+			"Acceptance criteria changed during execution and final acceptance reviewed it",
+		);
+	return reportUiText(
+		"执行中有验收口径调整，已在步骤检查中记录",
+		"Acceptance criteria changed during execution and was recorded in this step's checks",
+	);
 }
 
 // ---------------------------------------------------------------- footer / context
 
 function footerRow(dir: string, flow: FlowState) {
-	const t = copy(flow.language);
-	const updated = new Date(flow.updatedAt).toLocaleString(t.htmlLang);
+	const updatedAt = new Date(flow.updatedAt);
+	const updated = updatedAt.toLocaleString(copy(flow.language).htmlLang);
 	const record = requestRecord(dir, flow);
 	const requestLog = record
 		? `${requestRecordTrigger(flow.language)}${requestRecordModal(dir, flow, record)}`
@@ -889,14 +904,15 @@ function footerRow(dir: string, flow: FlowState) {
 	return `<div class="grid items-center gap-3 px-1 sm:grid-cols-3">
 <div class="justify-self-start">${requestLog}</div>
 <div class="justify-self-center">${commandButtons(flow)}</div>
-<p class="justify-self-end ${TYPE.meta} tabular-nums text-stone-400 dark:text-stone-500">${escapeHtml(t.updatedAt)} ${escapeHtml(updated)}</p>
+<p class="justify-self-end ${TYPE.meta} tabular-nums text-stone-400 dark:text-stone-500">${localizedText(reportUiCopy("updatedAt"), flow.language)} <time data-localized-time datetime="${updatedAt.toISOString()}">${escapeHtml(updated)}</time></p>
 </div>`;
 }
 
 function requestRecordTrigger(language: FlowState["language"]) {
 	return modalTrigger({
 		id: "dlg-request-record",
-		label: requestRecordLabel(language),
+		label: requestRecordLabel(),
+		language,
 		icon: "notebook",
 	});
 }
@@ -908,7 +924,7 @@ function requestRecordModal(
 ) {
 	return modal({
 		id: "dlg-request-record",
-		title: requestRecordLabel(flow.language),
+		title: requestRecordLabel(),
 		icon: "notebook",
 		body: `<div class="space-y-6">${requestSource(flow)}${requestQa(record.turns, flow.language)}${requestSourceLine(dir, flow)}</div>`,
 		language: flow.language,
@@ -929,16 +945,16 @@ function requestRecord(dir: string, flow: FlowState) {
 	return { turns };
 }
 
-function requestRecordLabel(language: FlowState["language"]) {
-	return language === "en" ? "Request log" : "需求记录";
+function requestRecordLabel() {
+	return reportUiText("需求记录", "Request log");
 }
 
 function requestSource(flow: FlowState) {
 	if (flow.source.type === "conversation")
 		return reportTranscript(flow.source.transcript, flow.language);
 	if (!flow.source.text.trim()) return "";
-	const label = flow.language === "en" ? "Original request" : "原始需求";
-	return `<section data-request-source-text>${sectionTitle(label)}
+	const label = reportUiText("原始需求", "Original request");
+	return `<section data-request-source-text>${sectionTitle(label, flow.language)}
 <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-stone-700 dark:text-stone-300">${escapeHtml(flow.source.text)}</p>
 </section>`;
 }
@@ -948,9 +964,9 @@ function requestQa(
 	language: FlowState["language"],
 ) {
 	if (turns.length === 0) return "";
-	const label = language === "en" ? "Q&A record" : "QA 记录";
+	const label = reportUiText("QA 记录", "Q&A record");
 	const rows = turns.map((turn, index) => requestQaTurn(turn, index)).join("");
-	return `<section data-request-qa>${sectionTitle(label)}<ol class="mt-3 space-y-4">${rows}</ol></section>`;
+	return `<section data-request-qa>${sectionTitle(label, language)}<ol class="mt-3 space-y-4">${rows}</ol></section>`;
 }
 
 function requestQaTurn(
@@ -966,12 +982,20 @@ ${answer ? `<div><p class="${TYPE.meta} font-semibold text-stone-400 dark:text-s
 }
 
 function requestSourceLine(dir: string, flow: FlowState) {
-	const label = flow.language === "en" ? "Source" : "来源";
-	return `<p class="flex flex-wrap items-center gap-2 border-t border-dashed border-stone-200 pt-4 ${TYPE.meta} text-stone-400 dark:border-stone-700 dark:text-stone-500"><span>${label}</span><span>·</span><span>${escapeHtml(sourceLabel(dir, flow))}</span></p>`;
+	const label = reportUiText("来源", "Source");
+	const source = reportUiText(
+		sourceLabel(dir, flow, "zh"),
+		sourceLabel(dir, flow, "en"),
+	);
+	return `<p class="flex flex-wrap items-center gap-2 border-t border-dashed border-stone-200 pt-4 ${TYPE.meta} text-stone-400 dark:border-stone-700 dark:text-stone-500"><span>${localizedText(label, flow.language)}</span><span>·</span><span>${localizedText(source, flow.language)}</span></p>`;
 }
 
-function sourceLabel(dir: string, flow: FlowState) {
-	const label = sourceTypeLabel(flow.source.type, flow.language);
+function sourceLabel(
+	dir: string,
+	flow: FlowState,
+	language: FlowState["language"],
+) {
+	const label = sourceTypeLabel(flow.source.type, language);
 	if (flow.source.type !== "file") return label;
 	return `${label} · ${safeDisplayPath(dir, flow.source.path)}`;
 }

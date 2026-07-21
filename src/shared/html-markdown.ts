@@ -1,14 +1,23 @@
 import { clipText } from "./clip.js";
+import type { Language } from "./config.js";
+import { type ReportUiText, reportUiCopy } from "./copy.js";
 import { cleanReportCopy } from "./report-copy.js";
 
-export function renderMarkdownBlock(markdown: string, className = "") {
-	const html = markdownToHtml(cleanReportCopy(markdown).trim() || "未填写");
+export function renderMarkdownBlock(
+	markdown: string,
+	className = "",
+	language: Language = "zh",
+) {
+	const normalized = cleanReportCopy(markdown).trim();
+	const html = normalized
+		? markdownToHtml(normalized, language)
+		: `<p>${localizedUiText(reportUiCopy("notProvided"), language)}</p>`;
 	return `<div class="${className || "space-y-3 text-sm leading-6 text-stone-700 dark:text-stone-300"}">${html}</div>`;
 }
 
 export { clipText };
 
-function markdownToHtml(markdown: string) {
+function markdownToHtml(markdown: string, language: Language) {
 	const state = { list: "" as "" | "ul" | "ol", paragraph: [] as string[] };
 	const html: string[] = [];
 	let code: string[] | undefined;
@@ -43,7 +52,9 @@ function markdownToHtml(markdown: string) {
 		const checkbox = line.match(/^-\s+\[([ xX~!])\]\s+(.+)$/u);
 		if (checkbox) {
 			openList(html, state, "ul");
-			html.push(checkboxItem(checkbox[2], checkboxStatus(checkbox[1])));
+			html.push(
+				checkboxItem(checkbox[2], checkboxStatus(checkbox[1]), language),
+			);
 			continue;
 		}
 		const bullet = line.match(/^[-*]\s+(.+)$/u);
@@ -108,37 +119,51 @@ function checkboxStatus(mark: string) {
 	if (mark === "~")
 		return {
 			icon: "…",
-			label: "进行中",
+			label: reportUiCopy("active"),
+			showLabel: true,
 			tone: "border-sky-300 bg-[var(--tone-blue-surface)] text-sky-800 dark:border-sky-700 dark:text-sky-300",
 		};
 	if (mark === "!")
 		return {
 			icon: "!",
-			label: "阻塞",
+			label: reportUiCopy("blocked"),
+			showLabel: true,
 			tone: "border-amber-300 bg-[var(--tone-amber-surface)] text-amber-800 dark:border-amber-700 dark:text-amber-300",
 		};
 	if (mark.trim())
 		return {
 			icon: "✓",
-			label: "完成",
+			label: reportUiCopy("done"),
+			showLabel: true,
 			tone: "border-emerald-300 bg-[var(--tone-green-surface)] text-emerald-800 dark:border-emerald-700 dark:text-emerald-300",
 		};
 	return {
 		icon: "",
-		label: "待做",
+		label: reportUiCopy("todo"),
+		showLabel: false,
 		tone: "border-stone-300 bg-[var(--report-surface)] text-transparent dark:border-stone-600",
 	};
 }
 
 function checkboxItem(
 	text: string,
-	status: { icon: string; label: string; tone: string },
+	status: {
+		icon: string;
+		label: ReportUiText;
+		showLabel: boolean;
+		tone: string;
+	},
+	language: Language,
 ) {
-	const label =
-		status.label === "待做"
-			? ""
-			: `<span class="ml-2 text-xs text-stone-400 dark:text-stone-500">${status.label}</span>`;
+	const labelClass = status.showLabel
+		? "ml-2 text-xs text-stone-400 dark:text-stone-500"
+		: "sr-only";
+	const label = `<span class="${labelClass}">${localizedUiText(status.label, language)}</span>`;
 	return `<li class="flex gap-2"><span class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-xs font-bold ${status.tone}">${status.icon}</span><span>${inline(text)}${label}</span></li>`;
+}
+
+function localizedUiText(value: ReportUiText, language: Language) {
+	return `<span data-ui-zh="${escapeHtml(value.zh)}" data-ui-en="${escapeHtml(value.en)}">${escapeHtml(value[language])}</span>`;
 }
 
 function codeBlock(text: string) {
