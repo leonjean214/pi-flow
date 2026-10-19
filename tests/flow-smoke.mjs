@@ -1215,7 +1215,7 @@ async function workerSpawnConfigScenario() {
 	const { PRIVATE_WORKER_ENV } = await importModule(
 		"flow/execution/worker-protocol.js",
 	);
-	const { flowMainExtensionPath } = await importModule(
+	const { flowMainExtensionPath, flowChildExtensionPath } = await importModule(
 		"shared/child-extensions.js",
 	);
 	const cwd = tempDir("worker-spawn-config");
@@ -1243,6 +1243,7 @@ async function workerSpawnConfigScenario() {
 			cwd,
 			initialPrompt: "run worker prompt",
 			sessionFile,
+			parentSessionFile: join(cwd, "parent.jsonl"),
 		});
 		const eventPromise = firstWorkerEvent(handle);
 		const exitPromise = workerExit(handle).then((exit) => {
@@ -1275,10 +1276,16 @@ async function workerSpawnConfigScenario() {
 			joined,
 		);
 		assert(invocation.env[PRIVATE_WORKER_ENV.initialPrompt] === "1", joined);
+		assert(invocation.env.PI_USAGE_ROLE === "worker", joined);
+		assert(
+			invocation.env.PI_USAGE_PARENT === join(cwd, "parent.jsonl"),
+			joined,
+		);
 		assert(invocation.env[PRIVATE_WORKER_ENV.socketPath], joined);
 		assert(invocation.env[PRIVATE_WORKER_ENV.token], joined);
 		assert(args.includes("--no-extensions"), joined);
 		assert(extensions.includes(flowMainExtensionPath()), joined);
+		assert(extensions.includes(flowChildExtensionPath()), joined);
 		assert(extensions.includes(userExtension), joined);
 		assert(!args.includes("--tools"), joined);
 		assert(!args.includes("--exclude-tools"), joined);
@@ -12756,7 +12763,7 @@ import { join } from "node:path";
 
 const args = process.argv.slice(2);
 const env = Object.fromEntries(
-	Object.entries(process.env).filter(([key]) => key.startsWith("PI_FLOW_WORKER_")),
+	Object.entries(process.env).filter(([key]) => key.startsWith("PI_FLOW_WORKER_") || key.startsWith("PI_USAGE_")),
 );
 const releasePath = join(process.cwd(), "release-worker-spawn");
 let releaseWatcher;
