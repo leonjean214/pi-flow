@@ -12,6 +12,7 @@ import {
 	startPrivateWorkerFromEnv,
 } from "./flow/execution/worker-command.js";
 import { goFlow, handleGoalCompletionEnd, stopFlow } from "./flow/execution.js";
+import { importExternalPlan } from "./flow/external-plan.js";
 import {
 	consumeFlowClarificationInput,
 	deliverFlowGenerationPrompt,
@@ -55,9 +56,11 @@ import { tokenize } from "./flow/util.js";
 import { closeFlowGoalWatcher } from "./flow/watcher.js";
 import { cancelGoalRecoveryAfterUserAction } from "./goal/runtime.js";
 import { setGoalActivityBox } from "./shared/activity-frame.js";
+import { readFlowConfig } from "./shared/config.js";
 import { generationStartOptions } from "./shared/generation-alignment.js";
 import { formatError } from "./shared/guards.js";
 import { appendVisibleUserInput } from "./shared/internal-prompt.js";
+import { runtimeLanguage } from "./shared/language.js";
 import {
 	bindLiveReport,
 	releaseReportStatusContext,
@@ -228,6 +231,19 @@ export async function handleFlowCommand(
 	cancelGoalRecoveryAfterUserAction(ctx);
 	const tokens = tokenize(args.trim());
 	const [command, ...rest] = tokens;
+	if (command === "--plan") {
+		const argument = args.trim().slice("--plan".length).trim();
+		const path: unknown = argument.startsWith('"')
+			? JSON.parse(argument)
+			: rest.length === 1
+				? rest[0]
+				: undefined;
+		if (typeof path !== "string" || !path)
+			throw new Error("Usage: /flow --plan <path.md>");
+		readFlowConfig(); // Fail before creating artifacts if the role override is invalid.
+		const flow = importExternalPlan(ctx.cwd, path, runtimeLanguage());
+		return goFlow(pi, ctx, flow.id);
+	}
 	if (!command) {
 		const options = await generationStartOptions(ctx);
 		if (!options) return;

@@ -167,7 +167,7 @@ export function createPreDraftFlow(
 	return initialized.value;
 }
 
-function reservePreDraftFlow(cwd: string) {
+export function reservePreDraftFlow(cwd: string) {
 	const existingIds = listFlowIds(cwd);
 	mkdirSync(flowRoot(cwd), { recursive: true });
 	let nextNumber = maxFlowNumber(existingIds) + 1;

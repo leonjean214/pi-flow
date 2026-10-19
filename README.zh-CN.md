@@ -210,6 +210,14 @@ tailscale serve --bg 49327
 
 </details>
 
+### 使用现成计划和独立角色配置
+
+`/flow --plan "path/to/plan.md"` 直接导入并执行已有计划，不进行对齐、生成或计划上下文继承。格式错误会报告具体章节，不回退到自动生成；原文件保持只读。
+
+每个 `# 步骤标题` 开始一个顺序执行步骤（1–10 个）。每步须包含 `## Objective`、`## Scope`、`## Steps`、`## Success Criteria`、`## Verification`。Objective 不得为空；Steps 和 Verification 各需至少一个 `- [ ]`；Objective、Scope、Success Criteria 是纯文本合同，不能写 checkbox。缺少的 `## Notes` 和 `## Handoff` 会自动补齐。代码围栏外的一级标题仅用于步骤分界。
+
+启动 Pi 前设置 `PI_FLOW_ROLES=/absolute/path/roles.json`，可覆盖本进程及子进程的角色，不写入全局 `config.json`。JSON 对象必须包含 `advisor`、`executor`、`reviewers`，各值格式与上文 `modelRoles` 相同；reviewers 可混用不同 provider。在新进程恢复时须再次传入同一配置；Flow 结束前请保持配置文件可读且内容不变。
+
 ## 工作流程
 
 ```text

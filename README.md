@@ -208,6 +208,14 @@ Independent Flows can also run in parallel from separate [git worktrees](https:/
 
 </details>
 
+### Bring your own plan and roles
+
+`/flow --plan "path/to/plan.md"` imports and immediately executes an existing plan, without alignment, generation, or planning-context inheritance. Invalid plans fail with section errors; they never fall back to generation. The source file is read-only.
+
+Each `# Goal title` starts one sequential step (1–10). Each step uses `## Objective`, `## Scope`, `## Steps`, `## Success Criteria`, and `## Verification`. Objective must be nonempty; Steps and Verification each need a `- [ ]` item. Objective, Scope, and Success Criteria are plain-text contracts, not checklists. Optional `## Notes` and `## Handoff` are supplied when absent. Use only these H1 goal boundaries outside fenced code.
+
+Set `PI_FLOW_ROLES=/absolute/path/roles.json` before starting Pi to replace roles for that process and its children, without changing `config.json`. The JSON object must contain `advisor`, `executor`, and `reviewers`, with the same values as `modelRoles` above; reviewers may use different providers. Pass the same override again when resuming in another process. Keep the file available and unchanged until the Flow finishes.
+
 ## Delivery loop
 
 ```text
