@@ -177,7 +177,7 @@ export function readFlowConfig(): FlowConfig {
 		background,
 		checks,
 		modelRoles: modelRolesConfig(
-			recordValue(parsed, "modelRoles"),
+			readRoleOverride() ?? recordValue(parsed, "modelRoles"),
 			background,
 			checks,
 		),
@@ -187,6 +187,22 @@ export function readFlowConfig(): FlowConfig {
 		quality: qualityConfig(recordValue(parsed, "quality")),
 		report: reportConfig(recordValue(parsed, "report")),
 	};
+}
+
+/** Process-local roles; inherited by check and worker subprocesses. Never writes config. */
+function readRoleOverride(): Record<string, unknown> | undefined {
+	const path = process.env.PI_FLOW_ROLES;
+	if (!path) return undefined;
+	try {
+		const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+		if (!isRecord(value)) throw new Error("expected a role object");
+		for (const key of MODEL_ROLES_KEYS) {
+			if (!(key in value)) throw new Error(`missing ${key}`);
+		}
+		return value;
+	} catch (error) {
+		throw new Error(`PI_FLOW_ROLES (${path}): ${formatError(error)}`);
+	}
 }
 
 export function readGenerationConfig(): GenerationConfig {

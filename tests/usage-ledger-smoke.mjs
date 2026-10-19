@@ -200,6 +200,18 @@ try {
 			process.env.PI_USAGE_LEDGER_DIR,
 		);
 	}
+	process.env.PI_FLOW_ROLES = join(out, "mixed-roles.json");
+	const mixedModels = [
+		"openai-codex/gpt-6-astra",
+		"claude-bridge/claude-sonnet-5-5",
+	];
+	for (const model of mixedModels)
+		await runReviewProcessResult({ ...config, model }, "ok", root);
+	for (const [index, { args, options }] of spawned.slice(-2).entries()) {
+		assert.equal(args[args.indexOf("--model") + 1], mixedModels[index]);
+		assert.equal(options.env.PI_USAGE_ROLE, "reviewer");
+		assert.equal(options.env.PI_FLOW_ROLES, process.env.PI_FLOW_ROLES);
+	}
 	console.log("usage ledger smoke ok");
 } finally {
 	childProcess.spawn = originalSpawn;
@@ -208,6 +220,7 @@ try {
 		"PI_USAGE_LEDGER_DIR",
 		"PI_USAGE_ROLE",
 		"PI_USAGE_PARENT",
+		"PI_FLOW_ROLES",
 	]) {
 		if (savedEnv[key] === undefined) delete process.env[key];
 		else process.env[key] = savedEnv[key];
