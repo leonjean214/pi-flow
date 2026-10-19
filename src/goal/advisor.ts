@@ -25,7 +25,7 @@ import { roundLabel } from "../shared/progress-labels.js";
 import { readPrompt } from "../shared/prompts.js";
 import type { ReviewHistoryEntry } from "../shared/review-history.js";
 import { shortModel } from "../shared/reviewer-pool.js";
-import { sessionEntriesSince } from "../shared/session.js";
+import { currentSessionFile, sessionEntriesSince } from "../shared/session.js";
 import { formatUserNotice } from "../shared/ui-language.js";
 import type { CheckRoundAdvisor } from "./types.js";
 
@@ -104,6 +104,7 @@ export async function consultAdvisor(
 				progressScope.feed("A1", event);
 				if (progress.current !== before) input.onProgress?.(progress.current);
 			},
+			{ role: "advisor", parent: currentSessionFile(input.ctx) },
 		);
 		progressScope.finish("A1", !output.ok);
 	} finally {

@@ -133,6 +133,7 @@ import {
 } from "./shared/reviewer-pool.js";
 import { registerRuntimePart } from "./shared/runtime-registration.js";
 import {
+	currentSessionFile,
 	finalAssistantText,
 	sessionEntries,
 	sessionEntriesSince,
@@ -1447,6 +1448,7 @@ async function runSingleReviewWithRetry(
 				ctx.cwd,
 				loop.controller.signal,
 				onEvent,
+				currentSessionFile(ctx),
 			),
 			language,
 		);

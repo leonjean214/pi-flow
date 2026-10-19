@@ -16,6 +16,7 @@ export async function runReviewProcess(
 	cwd: string,
 	signal?: AbortSignal,
 	onEvent?: (event: unknown) => void,
+	parent?: string,
 ): Promise<string | null> {
 	const result = await runReviewProcessResult(
 		config,
@@ -23,6 +24,7 @@ export async function runReviewProcess(
 		cwd,
 		signal,
 		onEvent,
+		parent,
 	);
 	if (result.kind === "output") return result.text;
 	if (result.kind === "empty_output") return "";
@@ -35,12 +37,18 @@ export async function runReviewProcessResult(
 	cwd: string,
 	signal?: AbortSignal,
 	onEvent?: (event: unknown) => void,
+	parent?: string,
 ): Promise<ReviewProcessResult> {
 	const events = collectAssistantEvents(onEvent);
 	const result = await runSpawnProcess({
 		command: config.command,
 		args: reviewProcessArgs(config, prompt),
 		cwd,
+		env: {
+			...process.env,
+			PI_USAGE_ROLE: "reviewer",
+			PI_USAGE_PARENT: parent ?? String(process.pid),
+		},
 		timeoutMs: config.timeoutMs,
 		signal,
 		onLine: events.onLine,

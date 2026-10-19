@@ -5,7 +5,10 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
-import { flowMainExtensionArgs } from "../../shared/child-extensions.js";
+import {
+	flowChildExtensionPath,
+	flowMainExtensionArgs,
+} from "../../shared/child-extensions.js";
 import { readFlowConfig } from "../../shared/config.js";
 import { formatError } from "../../shared/guards.js";
 import {
@@ -25,6 +28,7 @@ export interface WorkerSpawnOptions {
 	cwd: string;
 	initialPrompt: string;
 	sessionFile: string;
+	parentSessionFile?: string;
 	signal?: AbortSignal;
 }
 
@@ -139,7 +143,10 @@ export function spawnWorker(options: WorkerSpawnOptions): WorkerHandle {
 			[
 				"--mode",
 				"json",
-				...flowMainExtensionArgs(background.extensions),
+				...flowMainExtensionArgs([
+					...background.extensions,
+					flowChildExtensionPath(),
+				]),
 				"--session",
 				sessionPath,
 				"-p",
@@ -151,6 +158,8 @@ export function spawnWorker(options: WorkerSpawnOptions): WorkerHandle {
 				stdio: ["ignore", "pipe", "pipe"],
 				env: {
 					...process.env,
+					PI_USAGE_ROLE: "worker",
+					PI_USAGE_PARENT: options.parentSessionFile ?? String(process.pid),
 					...control.env,
 					[PRIVATE_WORKER_ENV.initialPrompt]: "1",
 				},

@@ -27,6 +27,7 @@ export interface SpawnRunnerOptions {
 	timeoutMs: number;
 	signal?: AbortSignal;
 	onLine?: (line: string) => void;
+	env?: NodeJS.ProcessEnv;
 }
 
 export function runSpawnProcess(
@@ -35,6 +36,7 @@ export function runSpawnProcess(
 	return new Promise((resolve) => {
 		const child = spawn(options.command, options.args, {
 			cwd: options.cwd,
+			env: options.env,
 			detached: process.platform !== "win32",
 			stdio: ["ignore", "pipe", "pipe"],
 		});

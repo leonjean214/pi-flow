@@ -41,7 +41,7 @@ import {
 	reviewerLabel,
 	runReviewerPool,
 } from "./shared/reviewer-pool.js";
-import { sessionEntriesSince } from "./shared/session.js";
+import { currentSessionFile, sessionEntriesSince } from "./shared/session.js";
 
 interface GoalForAudit {
 	text: string;
@@ -253,6 +253,7 @@ async function runSingleAudit(
 			ctx.cwd,
 			signal,
 			onEvent,
+			{ role: "auditor", parent: currentSessionFile(ctx) },
 		);
 		result = output.ok
 			? parseAuditOutput(output.text, language)

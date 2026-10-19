@@ -10,12 +10,18 @@ export async function runPiPrompt(
 	cwd: string,
 	signal?: AbortSignal,
 	onEvent?: (event: unknown) => void,
+	usage: { role: string; parent?: string } = { role: "executor" },
 ) {
 	const events = collectAssistantEvents(onEvent);
 	const result = await runSpawnProcess({
 		command: config.command,
 		args: piPromptArgs(config, prompt),
 		cwd,
+		env: {
+			...process.env,
+			PI_USAGE_ROLE: usage.role,
+			PI_USAGE_PARENT: usage.parent ?? String(process.pid),
+		},
 		timeoutMs: config.timeoutMs,
 		signal,
 		onLine: events.onLine,

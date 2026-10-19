@@ -610,6 +610,7 @@ function collectWorkerResults(
 					forkedFromPlanSession: isForkedWorkerSession(sessionFile),
 				}),
 				sessionFile,
+				parentSessionFile: currentSessionFile(ctx),
 				signal,
 			});
 			cleanups.push(
