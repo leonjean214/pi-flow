@@ -30,6 +30,10 @@ export interface ChecksConfig {
 	openaiFast: boolean;
 }
 
+export interface GoalsConfig {
+	tokenBudget?: number;
+}
+
 export interface RoleModelSelection {
 	model: string;
 	thinking: ThinkingLevelConfig;
@@ -86,6 +90,7 @@ export interface GenerationConfig {
 export interface FlowConfig {
 	background: BackgroundConfig;
 	checks: ChecksConfig;
+	goals: GoalsConfig;
 	modelRoles: ModelRolesConfig;
 	advisor: AdvisorConfig;
 	prewalk: PrewalkConfig;
@@ -135,6 +140,7 @@ const CONFIG_KEYS = new Set([
 	"generation",
 	"background",
 	"checks",
+	"goals",
 	"modelRoles",
 	"advisor",
 	"prewalk",
@@ -145,6 +151,7 @@ const CONFIG_KEYS = new Set([
 const GENERATION_KEYS = new Set(["align"]);
 const BACKGROUND_KEYS = new Set(["command", "extensions"]);
 const CHECKS_KEYS = new Set(["tools", "timeoutMinutes", "openaiFast"]);
+const GOALS_KEYS = new Set(["tokenBudget"]);
 const MODEL_ROLES_KEYS = new Set(["advisor", "executor", "reviewers"]);
 const ADVISOR_KEYS = new Set(["enabled"]);
 const PREWALK_KEYS = new Set(["enabled"]);
@@ -176,6 +183,7 @@ export function readFlowConfig(): FlowConfig {
 	return {
 		background,
 		checks,
+		goals: goalsConfig(recordValue(parsed, "goals")),
 		modelRoles: modelRolesConfig(
 			recordValue(parsed, "modelRoles"),
 			background,
@@ -266,6 +274,18 @@ function checksConfig(value: Record<string, unknown>): ChecksConfig {
 			DEFAULT_CHECKS.openaiFast,
 		),
 	};
+}
+
+function goalsConfig(value: Record<string, unknown>): GoalsConfig {
+	validateConfigFields(value, GOALS_KEYS, "goals");
+	if (value.tokenBudget === undefined) return {};
+	if (
+		typeof value.tokenBudget === "number" &&
+		Number.isSafeInteger(value.tokenBudget) &&
+		value.tokenBudget > 0
+	)
+		return { tokenBudget: value.tokenBudget };
+	throw configError("config.json 字段 goals.tokenBudget 必须是正整数");
 }
 
 function acceptanceConfig(value: Record<string, unknown>): AcceptanceConfig {

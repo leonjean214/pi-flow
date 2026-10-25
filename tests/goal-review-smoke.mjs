@@ -38,6 +38,7 @@ try {
 	await runScenario(checksValidationScenario);
 	await runScenario(checkRunRecoveryRulesScenario);
 	await runScenario(checkDisciplineHelpersScenario);
+	await runScenario(goalTokenBudgetScenario);
 	await runScenario(flowAcceptancePromptIncludesPlanScenario);
 	await runScenario(flowAcceptanceExcludesForkPrefixScenario);
 	await runScenario(flowAcceptanceLiveProgressScenario);
@@ -187,6 +188,85 @@ function acceptanceActivityStarted(probe) {
 	return probe.states.some((state) =>
 		state.sources.some((source) => source.startsWith("pi-flow:audit:")),
 	);
+}
+
+async function goalTokenBudgetScenario() {
+	const cwd = join(out, "goal-token-budget");
+	const sessionFile = join(cwd, "goal-session.jsonl");
+	writeFlow(cwd, sessionFile);
+	writeConfig({});
+	const state = createState();
+	const loaded = await loadGoalExtension(state);
+	const ctx = mockContext(state, cwd, sessionFile);
+	const attention = await attentionProbe();
+	try {
+		await loaded.module.startGoalFromFlow("Flow objective", ctx);
+		assert(
+			latestPersistedGoal(state).tokenBudget === undefined,
+			"default budget must be off",
+		);
+		state.entries.push({
+			type: "message",
+			message: { role: "assistant", usage: { input: 60, output: 50 } },
+		});
+		const before = state.sentMessages.length;
+		await loaded.handlers.get("agent_end")({ messages: [] }, ctx);
+		assert(
+			latestPersistedGoal(state).status === "active" &&
+				state.sentMessages.length > before,
+			"unconfigured goal stopped instead of continuing",
+		);
+
+		writeConfig({ goals: { tokenBudget: 100 } });
+		await loaded.module.pauseGoalFromFlow(ctx);
+		await loaded.module.startGoalFromFlow("Flow objective", ctx);
+		assert(
+			latestPersistedGoal(state).tokenBudget === 100,
+			"configured budget not applied",
+		);
+		state.entries.push({
+			type: "message",
+			message: { role: "assistant", usage: { input: 55, output: 46 } },
+		});
+		const sent = state.sentMessages.length;
+		await loaded.handlers.get("agent_end")(
+			{ messages: [{ role: "assistant", stopReason: "stop" }] },
+			ctx,
+		);
+		const limited = latestPersistedGoal(state);
+		assert(
+			limited.status === "budget_limited" && limited.tokensUsed === 101,
+			`budget did not limit goal: ${JSON.stringify(limited)}`,
+		);
+		assert(state.sentMessages.length === sent, "budget triggered another turn");
+		assert(
+			attention.sources.includes(`pi-flow:goal:${limited.id}`),
+			"budget did not request attention",
+		);
+		const reloaded = await loadGoalExtension(state);
+		reloaded.handlers.get("session_start")({}, ctx);
+		assert(
+			(await reloaded.module.resumePausedGoalFromFlow(ctx)) === "not_resumable",
+			"unchanged exhausted budget unexpectedly resumed",
+		);
+		assert(
+			state.sentMessages.length === sent,
+			"exhausted budget sent a prompt",
+		);
+		writeConfig({ goals: { tokenBudget: 300 } });
+		assert(
+			(await reloaded.module.resumePausedGoalFromFlow(ctx)) === "resumed",
+			"resume did not pick up increased budget",
+		);
+		assert(
+			latestPersistedGoal(state).status === "active" &&
+				latestPersistedGoal(state).tokenBudget === 300,
+			"resume did not re-read budget",
+		);
+	} finally {
+		attention.unsubscribe();
+		writeConfig({});
+	}
 }
 
 async function promptContractScenario() {
@@ -5203,6 +5283,7 @@ function writeConfig({
 	models,
 	modelRoles,
 	advisor,
+	goals,
 	openaiFast = false,
 	timeoutMs = 30000,
 }) {
@@ -5232,6 +5313,7 @@ function writeConfig({
 				...(modelRoles ?? {}),
 			},
 			...(advisor ? { advisor } : {}),
+			...(goals ? { goals } : {}),
 			acceptance: { enabled: acceptance },
 			quality: {
 				enabled: quality,
