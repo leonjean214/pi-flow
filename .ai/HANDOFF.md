@@ -2,6 +2,8 @@
 
 状态: DONE（待 Claude 部署）
 
+PR: https://github.com/leonjean214/pi-flow/pull/4（base feature/report-language-toggle，未合并）
+
 ## 假设
 - 冲突取舍选「改动最小、两边功能都保留」。
 - 在用 pi 的 report daemon 占着 127.0.0.1:49327（PID 58353，`~/pi-flow/dist/report-daemon.js`），不能杀。需要该固定端口的 4 个 smoke 在本机直接跑会 EADDRINUSE。验证时用**一次性拷贝**把 49327 全部替换成 49399，并用独立 `PI_CODING_AGENT_DIR`，**未提交任何端口改动**。
