@@ -132,6 +132,7 @@ cp config.template.json config.json
 | `modelRoles.executor` | `"current"` / 角色模型 | 执行开始时切一次；之后保留 Pi 当前选择 |
 | `modelRoles.reviewers` | 模型数组 | 验收和质检用的模型，每项含 `model` 和 `thinking`（`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`） |
 | `advisor.enabled` | 布尔 | 自动咨询与 `/advisor` 的总开关；默认 `true` |
+| `goals.tokenBudget` | 正整数 | 可选的每步骤累计执行模型 token 上限（输入+输出）；省略则不开启。每次 agent 回合结束检查，不在回合中途截断。达到上限后步骤变为 `budget_limited`、请求接管并停止自动延续；调高或移除上限再用 `/flow go`，恢复时重读配置。建议先对少量任务试用 `100000`，按实际用量调整；暂无计划/Flow 级覆盖 |
 | `prewalk.enabled` | 布尔 | 首个执行会话从计划会话 fork，执行模型直接继承计划期的代码探索；计划会话上下文过大、或计划完成后工作区被改动时自动回退新会话。隔离 harness A/B（真实模型调用；绕过 /flow 扩展路径与验收/质检环节；3 个单文件合成任务 × 9 对，含行为断言）：专用读取工具调用 1 vs 54，首步中位提速 1.4 倍，执行成本中位 0.99 倍（持平，范围 0.54–1.20），质量 18/18 持平。真实 Flow 初步 A/B（`npm run eval:prewalk:flow`，3 对串行、含验收/质检全链）确认 fork 在生产链路真实工作（goal 会话带计划血缘、执行期读取显著减少）且全部收口，但成本上 fork 仅 1/3 对占优，样本不足以宣称普遍收益。未配置 `prewalk` 时运行时回退值为 `false`；随包提供的 `config.template.json` 默认开启 |
 | `background.command` | `"pi"` | 后台 Worker 与检查子进程使用的 Pi 命令 |
 | `background.extensions` | 路径数组 | 后台 Pi 进程额外加载的扩展 |

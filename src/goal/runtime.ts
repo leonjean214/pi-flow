@@ -842,6 +842,7 @@ export function registerGoalRuntime(pi: ExtensionAPI) {
 				sendContinuationPrompt(pi, ctx, state.activeGoal);
 				return;
 			}
+			if (stopForBudget(ctx, state.activeGoal)) return;
 			if (finalAssistant?.stopReason === "stop") {
 				const blockedReason = blockedOnUserRequest(
 					finalAssistantText(event.messages ?? []),
@@ -854,7 +855,6 @@ export function registerGoalRuntime(pi: ExtensionAPI) {
 				return;
 			}
 			if (state.completionAuditPending?.goalId === goalId) return;
-			if (stopForBudget(ctx, state.activeGoal)) return;
 			saveActiveGoal(ctx);
 			if (hadPendingContinuation && !hasPendingMessages(ctx))
 				state.continuationPending = undefined;
@@ -938,7 +938,7 @@ export async function startGoalFromFlow(
 		{
 			...createGoal(
 				trimmed,
-				undefined,
+				readFlowConfig().goals.tokenBudget,
 				currentTokenTotal(ctx),
 				options.artifact,
 				language,
@@ -987,7 +987,10 @@ export async function resumePausedGoalFromFlow(
 	const previousGoal = goal;
 	const resumedGoal =
 		goal.status === "paused" ? { ...goal, id: randomUUID() } : goal;
-	state.activeGoal = transitionGoal(resumedGoal, "active");
+	state.activeGoal = transitionGoal(
+		{ ...resumedGoal, tokenBudget: readFlowConfig().goals.tokenBudget },
+		"active",
+	);
 	persistGoal(state.activeGoal, ctx);
 	if (
 		state.activeGoal.id !== previousGoal.id &&

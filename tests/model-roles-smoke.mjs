@@ -43,6 +43,23 @@ try {
 	);
 	assert(defaults.advisor.enabled === true, "advisor consult default not on");
 	assert(
+		defaults.goals.tokenBudget === undefined,
+		"goal budget must default off",
+	);
+	writeConfig({ goals: { tokenBudget: 120000 } });
+	assert(
+		config.readFlowConfig().goals.tokenBudget === 120000,
+		"goal budget not parsed",
+	);
+	for (const value of [0, -1, 1.5, "100", null, Number.MAX_SAFE_INTEGER + 1]) {
+		writeConfig({ goals: { tokenBudget: value } });
+		assertThrows(
+			() => config.readFlowConfig(),
+			"goals.tokenBudget 必须是正整数",
+			`invalid goal budget accepted: ${value}`,
+		);
+	}
+	assert(
 		defaults.background.command === "pi" &&
 			defaults.checks.timeoutMinutes === 20 &&
 			defaults.checks.openaiFast === false,
