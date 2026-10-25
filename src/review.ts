@@ -17,10 +17,12 @@ import {
 import type { CheckModelOutcome, CheckRoundAdvisor } from "./goal/types.js";
 import { aggregateReviewOutcomes } from "./review/aggregate.js";
 import {
+	nextReviewReportRun,
 	REVIEW_CHECKPOINT_ENTRY_TYPE,
 	ReviewCheckpointConflictError,
 	type ReviewCheckpointState,
 	readReviewCheckpoint,
+	reviewReportPublication,
 	writeReviewCheckpoint,
 } from "./review/checkpoint.js";
 import { emptyReviewOutputOutcome } from "./review/outcome.js";
@@ -104,7 +106,7 @@ import { autoOpenMonitorOverlay } from "./shared/monitor-overlay.js";
 import { formatPlanEvidence } from "./shared/plan-evidence.js";
 import { readPrompt } from "./shared/prompts.js";
 import {
-	liveReportUrl,
+	bindLiveReport,
 	releaseReportStatusContext,
 } from "./shared/report-client.js";
 import {
@@ -162,9 +164,18 @@ let reviewRetryExhaustionWatch: ReviewRetryExhaustionWatch | undefined;
 let reviewRetryExhaustionGeneration = 0;
 const handledReviewAgentEndEvents = new WeakMap<object, ReviewAgentEndResult>();
 const reviewAgentEndSnapshots = new WeakMap<object, ReviewAgentEndSnapshot>();
+interface StandaloneReviewProjectionQueue {
+	pending?: { language: Language; flowConfig: FlowConfig };
+	running?: Promise<void>;
+	scheduled?: NodeJS.Immediate;
+}
+
 const standaloneReviewReportFiles = new WeakMap<object, string>();
-const standaloneReviewReportStatus = new WeakMap<object, Promise<void>>();
 const standaloneReviewReportErrors = new WeakMap<object, string>();
+const standaloneReviewProjectionQueues = new WeakMap<
+	object,
+	StandaloneReviewProjectionQueue
+>();
 
 function reviewNeedsInteractiveNotice(language: Language) {
 	return language === "en"
@@ -240,6 +251,7 @@ export function registerReviewRuntime(pi: ExtensionAPI) {
 			setReviewActivityBox(ctx, undefined);
 			clearFlowActivities();
 			clearStatus(ctx, REVIEW_STATUS_KEY);
+			await flushStandaloneReviewReport(ctx);
 			releaseReportStatusContext(ctx);
 		});
 	});
@@ -285,7 +297,7 @@ export async function handleReviewSessionStart(
 	pendingReviewCheckResume = false;
 	pendingReviewRestartRecovery = false;
 	if (readReviewCheckpoint(ctx))
-		await restoreStandaloneReviewReportStatus(ctx, runtimeLanguage());
+		restoreStandaloneReviewReportStatus(ctx, runtimeLanguage());
 	resumeStandaloneReviewAfterRestart(pi, ctx);
 }
 
@@ -382,10 +394,11 @@ function armStandaloneReview(
 		round: 0,
 		phase: "awaiting_agent",
 		history: [],
+		reportRun: nextReviewReportRun(checkpoint?.reportRun),
 	};
 	try {
 		writeReviewCheckpoint(pi, ctx, armed, null);
-		void refreshStandaloneReviewReport(ctx, armed, language, flowConfig);
+		queueStandaloneReviewReport(ctx, language, flowConfig);
 	} catch (error) {
 		notifyUser(
 			ctx,
@@ -407,13 +420,7 @@ function restoreAwaitingStandaloneReview(
 	flowConfig: FlowConfig,
 	checkpoint: ReviewCheckpointState,
 ) {
-	const loop = resumedAwaitingReviewLoop(
-		pi,
-		ctx,
-		flowConfig,
-		checkpoint.round,
-		checkpoint.history,
-	);
+	const loop = resumedAwaitingReviewLoop(pi, ctx, flowConfig, checkpoint);
 	activeReviewLoop = loop;
 	return loop;
 }
@@ -512,6 +519,7 @@ export async function runConfiguredReview(
 		controller: new AbortController(),
 		history: [...initialHistory],
 		reviewerProgress: [],
+		reportRun: resolveStandaloneReportRun(ctx, options),
 		finished,
 		resolveFinished,
 	};
@@ -648,6 +656,7 @@ function discardInterruptedReviewCheckpoint(
 			round: checkpoint.round,
 			phase: null,
 			history: checkpoint.history,
+			reportRun: checkpoint.reportRun,
 		};
 		writeReviewCheckpoint(
 			undefined,
@@ -655,7 +664,7 @@ function discardInterruptedReviewCheckpoint(
 			state,
 			checkpoint.active?.generation ?? null,
 		);
-		void refreshStandaloneReviewReport(ctx, state, language, flowConfig);
+		queueStandaloneReviewReport(ctx, language, flowConfig);
 	} catch (error) {
 		notifyUser(
 			ctx,
@@ -696,8 +705,7 @@ function resumedAwaitingReviewLoop(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	flowConfig: FlowConfig,
-	round: number,
-	history: ReviewHistoryEntry[],
+	checkpoint: ReviewCheckpointState,
 ): ReviewLoop {
 	let resolveFinished: () => void = () => undefined;
 	const finished = new Promise<void>((resolve) => {
@@ -706,7 +714,7 @@ function resumedAwaitingReviewLoop(
 	return {
 		context: ctx,
 		flowConfig,
-		round: Math.max(0, round),
+		round: Math.max(0, checkpoint.round),
 		repairs: 0,
 		startedAt: Date.now(),
 		stepStartedAt: Date.now(),
@@ -717,8 +725,9 @@ function resumedAwaitingReviewLoop(
 			onRoundFailed: standaloneReviewRoundFailed(ctx),
 		}),
 		controller: new AbortController(),
-		history: [...history],
+		history: [...checkpoint.history],
 		reviewerProgress: [],
+		reportRun: checkpoint.reportRun,
 		finished,
 		resolveFinished,
 	};
@@ -1193,7 +1202,11 @@ function buildReviewEvidence(
 ) {
 	const separator = language === "en" ? ":" : "：";
 	const priorRounds = priorRoundsSection(history, round, language);
-	const fixedPrompt = `${readPrompt("review", language)}\n\n${language === "en" ? "Review target" : "审查对象"}${separator}\n${reviewScopeText(scope, language)}${priorRounds ? `\n\n${priorRounds}` : ""}\n\n${language === "en" ? "Context Evidence" : "上下文证据"}${separator}\n`;
+	const severity =
+		scope?.kind === "goal"
+			? `\n\n${readPrompt("flow-review-severity", language)}`
+			: "";
+	const fixedPrompt = `${readPrompt("review", language)}${severity}\n\n${language === "en" ? "Review target" : "审查对象"}${separator}\n${reviewScopeText(scope, language)}${priorRounds ? `\n\n${priorRounds}` : ""}\n\n${language === "en" ? "Context Evidence" : "上下文证据"}${separator}\n`;
 	return {
 		fixedPrompt,
 		evidence: buildContextEvidence({
@@ -1229,7 +1242,7 @@ function reviewScopeText(
 				changeNote ? `\n${changeNote}` : "",
 				"",
 				"The goal text limits issue relevance; the plan limits scope, steps, and acceptance criteria. Report only issues that affect this goal's delivery quality. Do not request new features, refactors, or optimizations outside the goal.",
-				"Scope completeness was already gated by the prior acceptance check: do not re-verify requirement coverage item by item. The acceptance verdict is not your evidence either; only files you actually read and commands you actually ran are. If you find concrete evidence that a requirement is actually unmet, report it as High severity.",
+				"Scope completeness was already gated by the prior acceptance check: do not re-verify requirement coverage item by item. The acceptance verdict is not your evidence either; only files you actually read and commands you actually ran are. If you find concrete evidence that a requirement is actually unmet, report it as P0.",
 				"Focus on implementation quality: logic defects, edge cases, error handling, races, fake or insufficient tests, regression risk.",
 			].join("\n");
 		return [
@@ -1240,7 +1253,7 @@ function reviewScopeText(
 			changeNote ? `\n${changeNote}` : "",
 			"",
 			"目标文本用于限定质量问题的相关性；计划用于限定 scope、步骤和验收口径。只报告影响该目标交付质量的问题。不要要求超出目标的新功能、新重构或新优化。",
-			"范围完整性已由前置验收把关：不要重复逐项验证需求覆盖。验收结论也不是你的证据，只有你实际读取的文件和实际运行的命令才是；若发现具体证据表明某项要求实际未完成，按高严重度报告。",
+			"范围完整性已由前置验收把关：不要重复逐项验证需求覆盖。验收结论也不是你的证据，只有你实际读取的文件和实际运行的命令才是；若发现具体证据表明某项要求实际未完成，按 P0 报告。",
 			"重心放在实现质量：逻辑缺陷、边界条件、错误处理、竞态、虚假或不充分的测试、回归风险。",
 		].join("\n");
 	}
@@ -1399,11 +1412,11 @@ async function persistReviewCheckpoint(
 				round: loop.round,
 				phase,
 				history,
+				reportRun: standaloneReviewReportRun(loop),
 			};
 			writeReviewCheckpoint(undefined, loop.context, state, expectedGeneration);
-			await refreshStandaloneReviewReport(
+			queueStandaloneReviewReport(
 				loop.context,
-				state,
 				reviewLanguage(loop),
 				loop.flowConfig,
 			);
@@ -1970,6 +1983,7 @@ function persistStandaloneReviewPhase(
 			round: loop.round,
 			phase,
 			history: loop.history,
+			reportRun: standaloneReviewReportRun(loop),
 		};
 		writeReviewCheckpoint(
 			undefined,
@@ -1977,9 +1991,8 @@ function persistStandaloneReviewPhase(
 			state,
 			loop.activeCheck?.generation ?? null,
 		);
-		void refreshStandaloneReviewReport(
+		queueStandaloneReviewReport(
 			loop.context,
-			state,
 			reviewLanguage(loop),
 			loop.flowConfig,
 		);
@@ -2042,13 +2055,71 @@ function isReviewCheckpointEntry(entry: Record<string, unknown>) {
 	);
 }
 
-async function refreshStandaloneReviewReport(
+function queueStandaloneReviewReport(
 	ctx: ExtensionContext,
-	state: ReviewCheckpointState,
+	language: Language,
+	flowConfig: FlowConfig,
+) {
+	const queue = standaloneReviewProjectionQueues.get(ctx) ?? {};
+	queue.pending = { language, flowConfig };
+	standaloneReviewProjectionQueues.set(ctx, queue);
+	if (queue.running || queue.scheduled) return;
+	queue.scheduled = setImmediate(() =>
+		startStandaloneReviewProjection(ctx, queue),
+	);
+}
+
+function startStandaloneReviewProjection(
+	ctx: ExtensionContext,
+	queue: StandaloneReviewProjectionQueue,
+) {
+	queue.scheduled = undefined;
+	const running = drainStandaloneReviewProjections(ctx, queue);
+	queue.running = running;
+	const finish = () => {
+		if (queue.running !== running) return;
+		queue.running = undefined;
+		if (queue.pending) {
+			queue.scheduled = setImmediate(() =>
+				startStandaloneReviewProjection(ctx, queue),
+			);
+		} else standaloneReviewProjectionQueues.delete(ctx);
+	};
+	void running.then(finish, finish);
+}
+
+async function drainStandaloneReviewProjections(
+	ctx: ExtensionContext,
+	queue: StandaloneReviewProjectionQueue,
+) {
+	while (queue.pending) {
+		const { language, flowConfig } = queue.pending;
+		queue.pending = undefined;
+		await projectStandaloneReviewReport(ctx, language, flowConfig);
+	}
+}
+
+async function flushStandaloneReviewReport(ctx: ExtensionContext) {
+	const queue = standaloneReviewProjectionQueues.get(ctx);
+	if (!queue) return;
+	while (queue.running || queue.scheduled || queue.pending) {
+		if (queue.scheduled) {
+			clearImmediate(queue.scheduled);
+			startStandaloneReviewProjection(ctx, queue);
+		} else if (queue.pending && !queue.running)
+			startStandaloneReviewProjection(ctx, queue);
+		if (queue.running) await queue.running;
+	}
+}
+
+async function projectStandaloneReviewReport(
+	ctx: ExtensionContext,
 	language: Language,
 	flowConfig: FlowConfig,
 ) {
 	try {
+		const state = readReviewCheckpoint(ctx);
+		if (!state) return;
 		const { evidence } = buildReviewEvidence(
 			ctx,
 			flowConfig,
@@ -2060,29 +2131,27 @@ async function refreshStandaloneReviewReport(
 		);
 		standaloneReviewReportFiles.set(
 			ctx,
-			writeReviewReport(ctx, state, language, evidence),
+			await writeReviewReport(ctx, state, language, evidence),
 		);
 		standaloneReviewReportErrors.delete(ctx);
-		const status = ensureStandaloneReviewReportStatus(ctx, language);
-		standaloneReviewReportStatus.set(ctx, status);
-		await status;
+		bindStandaloneReviewReport(ctx, language, state);
 	} catch (error) {
-		notifyStandaloneReviewReportFailure(ctx, formatError(error), language);
+		try {
+			notifyStandaloneReviewReportFailure(ctx, formatError(error), language);
+		} catch {}
 	}
 }
 
-async function notifyStandaloneReviewTerminal(
+function notifyStandaloneReviewTerminal(
 	ctx: ExtensionContext,
 	loop: ReviewLoop,
 	notice: string,
 ) {
 	if (loop.options.scope?.kind === "goal") return;
-	const language = reviewLanguage(loop);
-	await standaloneReviewReportStatus.get(ctx);
-	notifyUser(ctx, notice, "info", language);
+	notifyUser(ctx, notice, "info", reviewLanguage(loop));
 }
 
-async function restoreStandaloneReviewReportStatus(
+function restoreStandaloneReviewReportStatus(
 	ctx: ExtensionContext,
 	language: Language,
 ) {
@@ -2094,20 +2163,43 @@ async function restoreStandaloneReviewReportStatus(
 	}
 	if (!existsSync(path)) return;
 	standaloneReviewReportFiles.set(ctx, path);
-	await ensureStandaloneReviewReportStatus(ctx, language);
+	bindStandaloneReviewReport(ctx, language);
 }
 
-async function ensureStandaloneReviewReportStatus(
+function bindStandaloneReviewReport(
 	ctx: ExtensionContext,
 	language: Language,
+	state?: ReviewCheckpointState,
 ) {
 	const path = standaloneReviewReportFiles.get(ctx);
 	if (!path) return;
-	try {
-		await liveReportUrl(ctx, path, language);
-	} catch (error) {
-		notifyStandaloneReviewReportFailure(ctx, formatError(error), language);
-	}
+	const checkpoint = state ?? readReviewCheckpoint(ctx);
+	if (!checkpoint) return;
+	bindLiveReport(ctx, path, language, reviewReportPublication(checkpoint));
+}
+
+function standaloneReviewReportRun(loop: ReviewLoop) {
+	if (loop.reportRun !== undefined) return loop.reportRun;
+	const checkpoint = readReviewCheckpoint(loop.context);
+	if (checkpoint && (checkpoint.phase !== null || checkpoint.active !== null))
+		return checkpoint.reportRun;
+	const reportRun = nextReviewReportRun(checkpoint?.reportRun);
+	loop.reportRun = reportRun;
+	return reportRun;
+}
+
+function resolveStandaloneReportRun(
+	ctx: ExtensionContext,
+	options: ReviewLoopOptions,
+) {
+	if (options.scope?.kind === "goal") return undefined;
+	const checkpoint = readReviewCheckpoint(ctx);
+	const resumable =
+		options.activeCheck ||
+		checkpoint?.active ||
+		checkpoint?.phase === "awaiting_agent";
+	if (resumable && checkpoint) return checkpoint.reportRun;
+	return nextReviewReportRun(checkpoint?.reportRun);
 }
 
 function notifyStandaloneReviewReportFailure(
