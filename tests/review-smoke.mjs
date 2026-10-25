@@ -1284,14 +1284,11 @@ async function englishCurrentTaskReviewPromptScenario() {
 		"reviews",
 		`${basename(state.sessionFile, ".jsonl")}.html`,
 	);
-	const report = await waitFor(
-		() => {
-			if (!existsSync(reportPath)) return;
-			const html = readFileSync(reportPath, "utf8");
-			return html.includes("Operation evidence:") && html;
-		},
-		"english review report was not written",
-	);
+	const report = await waitFor(() => {
+		if (!existsSync(reportPath)) return;
+		const html = readFileSync(reportPath, "utf8");
+		return html.includes("Operation evidence:") && html;
+	}, "english review report was not written");
 	assert(
 		report.includes(
 			"The following content was provided to the review models as evidence.",
