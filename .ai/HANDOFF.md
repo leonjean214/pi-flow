@@ -1,57 +1,31 @@
-# flow-hybrid — A / pi-flow
+# HANDOFF：整合 fork/main 到在用分支
+
+状态: DONE（待 Claude 部署）
 
 ## 假设
-- 外部 markdown 严格沿用现有 Goal 合同，不猜测普通任务单结构。每个 H1 开始一个顺序执行 Goal（1–10 个），无并行/额外 final_acceptance DSL。
-- `/flow --plan <path>` 表示直接校验、导入、启动，不问确认、不调用生成/对齐模型，不登记 prewalk 记忆。原文件只读。
-- `PI_FLOW_ROLES` 指向完整角色对象，仅影响本进程及子进程；不新增 canonical schema 字段。换进程恢复须重传相同配置。
+- 冲突取舍选「改动最小、两边功能都保留」。
+- 在用 pi 的 report daemon 占着 127.0.0.1:49327（PID 58353，`~/pi-flow/dist/report-daemon.js`），不能杀。需要该固定端口的 4 个 smoke 在本机直接跑会 EADDRINUSE。验证时用**一次性拷贝**把 49327 全部替换成 49399，并用独立 `PI_CODING_AGENT_DIR`，**未提交任何端口改动**。
 
-## 变更
-- `src/flow/external-plan.ts`：解析外部计划，预校验章节，在独占预留的 Flow 目录锁内复用 canonical builder/validator 提交；错误不回退生成。
-- `src/flow.ts`：新增 `/flow --plan <path>`，支持 JSON 双引号路径（包括空格/转义字符），直接复用 `goFlow`。
-- `src/flow/store.ts`：导出现有原子目录预留函数。
-- `src/shared/config.ts`：只读 `PI_FLOW_ROLES`，复用角色校验与 provider-neutral reviewer 配置；要求三个角色键齐全。
-- `tests/external-plan-smoke.mjs` / `tests/usage-ledger-smoke.mjs`：导入/坏计划/源文件只读/全局配置不变、混 provider reviewer 的实际 spawn 模型和账本角色环境传播。
-- `package.json`、双语 README：接入测试、记录格式与接口。
+## 变更摘要
+`git merge fork/main`（da3f1d8，6 个提交）进 `integrate/live-with-main`（起点 3129180），merge commit e8c5e53。仅 2 个文件冲突。
 
-## 给 Claude 的计划格式
-每个一级标题就是一个 Goal；不要另写总标题。最小单步如下，再紧接另一组 `# 下一步标题` 和相同章节即可得到两步 Flow。外部文件路径相对于当前 cwd；命令推荐 `/flow --plan "/absolute/path/plan.md"`。
+### 冲突取舍
+1. `package.json` 的 `scripts.test`：取 main 的列表（新增 `graph-flow-eval-smoke`），再补回我方 `external-plan-smoke`、`usage-ledger-smoke`、`report-language-smoke`。理由：两边的 smoke 都要跑；`tests/` 下全部 `*smoke.mjs` 都在列表里（已程序核对）。`eval:graph` 脚本与 main 的 0.81.0 依赖由 git 自动合并，无冲突。
+2. `src/flow.ts` import 块：保留我方 `runtimeLanguage`（仍在用），报告 import 取 main 的 `releaseReportStatusContext`，丢掉 `bindLiveReport`。理由：main 把 flow 报告绑定改成统一生命周期后，`flow.ts` 里 `bindLiveReport` 已无调用，留着会被 biome 判未使用。
 
-```markdown
-# 创建文件
-## Objective
-创建 hello.txt，内容为 hello 加换行。
-## Scope
-只改 hello.txt 与本步骤运行态计划。
-## Steps
-- [ ] 创建 hello.txt。
-## Success Criteria
-hello.txt 内容准确。
-## Verification
-- [ ] 用命令核对文件内容。
-```
-
-`Notes` / `Handoff` 可省略，导入时补齐；其他上述章节必需。Objective 不得为空。Steps/Verification 各至少一个 checkbox；Objective/Scope/Success Criteria 不得有 checkbox。代码围栏外 H1 只作 Goal 分界。
-
-角色 JSON 是直接的 `{"executor":{"model":"provider/id","thinking":"high"},"advisor":"current","reviewers":[{"model":"provider/id","thinking":"medium"}]}`，不包 `modelRoles`。文件需在整次 Flow 期间保持可读且不变。
+### 自动合并核对
+- `PI_FLOW_ROLES`（`src/shared/config.ts:194`）、外部计划导入（`src/flow/external-plan.ts`）仍在。
+- `prompts/{zh,en}/flow-review-severity.md` 存在；`src/auditor.ts`/`src/review.ts` 的分级注入、`src/flow/html.ts`、`batch-runner.ts`、`src/shared/report-directory.ts` 来自 main。
+- 对 3129180 的 diff 中被删的行都是 main 重构替换掉的旧代码（独立质检报告刷新、`bindLiveReport`、旧 review 提示拼接）。
 
 ## 验证
-- Win 原生尝试：现有构建脚本以 Unix `.bin/tailwindcss` 路径 spawn，报 ENOENT；未修改无关平台构建代码。
-- `mac-bg ... npm run check`：exit 0。
-- `mac-bg` 定向 external-plan / model-roles / usage-ledger / copy-lint smoke：全过。
-- 本机 `npm test` 在 review smoke 被线上固定端口 49327 daemon 阻挡；没有停止线上服务。
-- 已换免费 Linux CI 验证全量：`npm run check && npm test` 全过，run https://github.com/leonjean214/pi-flow/actions/runs/39243211208 （commit 84e43b5）。
+- 基线（fork/main da3f1d8，临时 worktree，已移除）：`npm ci` 通过；`npm test` 在 `review-smoke` 处断（该 smoke 在 `npm test` 里串联，短路）。逐个跑：除 flow/package/report-server/review 4 个 smoke 因 49327 被占而失败外全过。端口改 49399 + 隔离 `PI_CODING_AGENT_DIR` 后这 4 个全过。**没有复现任务单预期的 `englishCurrentTaskReviewPromptScenario` ENOENT。**
+- 整合分支：`npm ci` exit 0；`npm run check` exit 0；
+  - 逐个跑 `tests/*smoke.mjs`：同样只有那 4 个因端口被占失败，与基线一致；
+  - 端口改 49399 的拷贝里完整 `npm test` exit 0（18 个 "smoke ok"，footer smoke 因缺 `../footer.ts` 按设计跳过，与基线一致）。
+- 冒烟（整合后 `dist/`，临时目录）：无 `PI_FLOW_ROLES` 时 executor=`current`；设置后 executor=`openai-codex/sol`/high，reviewers=astra、sonnet；zh/en 分级提示均含 P0–P3 与「只有 P0/P1 驱动 FAIL」；`tests/goal-review-smoke.mjs` 断言该文本注入真实 reviewer 参数。
+- `~/pi-flow` 主 checkout 未触碰。
 
-## 真实冒烟（与 B 联调）
-命令：`pi-flow-run --cwd /tmp/flow-hybrid-smoke --plan /tmp/flow-hybrid-smoke/plan.md --roles /tmp/flow-hybrid-smoke/roles.json --model openai-codex/gpt-6-luna --timeout 600`。
-仅在临时 PATH 注入 launcher，加载本 worktree dist 和已有 usage-ledger；未安装或替换线上插件。所有角色配置为 `openai-codex/gpt-6-luna / low`。
-- F1：两 Goal 均 complete；第 1 步创建 hello.txt，第 2 步修改，最终内容准确为 `hello hybrid\n`。
-- 计划生成未发生：`meta={plannedBy:null,alignment:null}`，初始即执行外部计划；源计划未改。
-- `~/pi-flow/config.json` MD5 前后均为 `1f25f2266e2b7129a189d746b6986b21`。
-- 原始账本匹配此 cwd：executor 10、auditor 12、reviewer 12，provider 全为 openai-codex、model 全为 gpt-6-luna。为验证无失败时不会自然触发的 advisor，另做同配置 `runPiPrompt` 顾问路径探针，返回 OK，advisor 2 行；这是单独探针，不声称 Flow 自动触发顾问。原始行数含工具回合及 child/显式 ledger 扩展重复记录，不代表独立模型请求数。
-- 坏计划真实 RPC：列出 Goal 1 缺少的 Scope/Steps/Success Criteria/Verification，不创建 F 目录、不调用模型；B 正确处理 Pi 的 `extension_error`，exit 1。
-- 日志：`/tmp/flow-hybrid-real-smoke.log`、`/tmp/flow-hybrid-advisor-probe.log`、`/tmp/flow-hybrid-bad-fixed.log`。
-
-## 交付与风险
-- A PR：https://github.com/leonjean214/pi-flow/pull/2，base `feature/report-language-toggle`；未合并。
-- B 依赖 A；审查合并/上线必须先 A 后 B。没有更改两个主 checkout 的工作文件或本机全局配置。
-- 混 provider 的模型参数/角色环境已定向测试；为控制花费，真实模型冒烟按要求全用 Luna，没有额外真调 Claude reviewer。
+## 风险 / 待 Claude 操作
+- 部署：把 `~/pi-flow` 更新到本分支前，注意在用 daemon 是协议 1、main 是协议 2（`Incompatible pi-flow report protocol 1; expected 2`）：部署后需重启运行中的 pi / report daemon。
+- 固定端口的 smoke 在 pi 运行时无法在本机直接跑，CI 或停掉 daemon 后再跑一次更稳。
