@@ -454,6 +454,9 @@ async function flowAcceptancePromptIncludesPlanScenario() {
 	assert(!args.includes("相关文件线索："), args);
 	assert(args.includes(".flow/F1/G1-login.md"), args);
 	assert(args.includes("## Success Criteria\n- Flow plan proof."), args);
+	assert(args.includes("## Flow 严重度分级"), args);
+	assert(args.includes("只有 P0/P1 才能驱动 FAIL"), args);
+	assert(args.includes("P2/P3 只记录，不阻塞"), args);
 	assert(!args.includes("计划修订检测"), "unchanged plan injected change note");
 	const flow = readFlow(cwd);
 	assert(

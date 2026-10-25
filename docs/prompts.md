@@ -18,6 +18,7 @@ pi-flow 全部模型可见文案的位置、触发时机与投递方式。改任
 | `grilling.md` | 对齐拷问协议（高杠杆问题优先、假设默认制、技术选型条款、「按推荐」委托、预算收敛） | advisor 角色会话；`src/shared/generation-alignment.ts` 按 coarse/standard/deep 只替换 `{{questionBudget}}` 数字，后续轮发送带同档预算的精简触发提示 |
 | `goal-audit.md` | 验收 reviewer（完整性 gate：目标是否按原范围完成；PASS 带证据锚点；FAIL 锚定具体要求） | reviewer 子进程，`src/auditor.ts#buildAuditPrompt` 组装 |
 | `review.md` | 质检 reviewer（质量 gate：逻辑缺陷、虚假测试、回归；必须读源码；FAIL 仅高/中严重度；PASS 带证据锚点与非阻塞建议） | reviewer 子进程，`src/review.ts#buildReviewPrompt` 组装 |
+| `flow-review-severity.md` | Flow 专用 P0–P3 分级：仅 P0/P1 可 FAIL，P2/P3 只记录；覆盖基础协议中冲突的旧严重度措辞 | `src/auditor.ts#buildAuditPrompt`（有 Flow plan）与 `src/review.ts#buildReviewEvidence`（goal scope）；不注入独立 `/review` |
 | `advisor.md` | 顾问模型（同一步骤连续 2/4/6/8 轮检查未通过时自动咨询，或串行 Flow 有未解决失败时由 `/advisor` 手动咨询；跨轮核实根因、提炼系统性洞察、给出方向与验证/转向条件，并仲裁 Success Criteria；可用 bash 做安全验证但不得修改项目） | advisor 子进程（`advisorConsultModel` 解析，`current` 只回落第一个 reviewer 的模型选择；检查能力共用 `checks`），`src/goal/advisor.ts#buildAdvisorPrompt` 组装 |
 
 验收与质检的分工：验收管范围完整性，质检管实现质量；goal scope 的质检不重复逐项验证需求覆盖（`src/review.ts#reviewScopeText`）。
@@ -48,8 +49,8 @@ PASS 输出的机器强制边界（`src/shared/review-verdict.ts#passOutputIssue
 - `src/shared/context-evidence.ts` 直接读取 `sessionManager.getBranch()` 原始事件。它不读取 compaction/branch summary 内容，也不解析压缩插件 details。
 - `requirements` 投影供 conversation 来源的计划生成使用：按原顺序保留真实用户、可见用户补充和 assistant 最终声明；不同事件即使正文相同也保留，入选原文不做遮罩。
 - `review` 投影供验收、质检和顾问共用：在 `requirements` 基础上加入工具动作与配对结果、失败头尾、最近验证、edit/write 路径和最近完整操作链；旧成功 read/bash 输出只保留动作与状态。
-- 验收：`goal-audit.md` + 目标 + 计划 markdown + 计划修订注入（有修订时）+ 往轮发现清单（第 2 轮起，`priorRoundsSection`）+ `review` packet（`src/auditor.ts`）。
-- 质检：`review.md` + scope 限定（goal scope 含正交化说明与计划修订注入）+ 往轮发现清单（第 2 轮起，`priorRoundsSection`）+ `review` packet（`src/review.ts`）。
+- 验收：`goal-audit.md` + Flow 分级（有计划时）+ 目标 + 计划 markdown + 计划修订注入（有修订时）+ 往轮发现清单（第 2 轮起，`priorRoundsSection`）+ `review` packet（`src/auditor.ts`）。
+- 质检：`review.md` + Flow 分级（仅 goal scope）+ scope 限定（goal scope 含正交化说明与计划修订注入）+ 往轮发现清单（第 2 轮起，`priorRoundsSection`）+ `review` packet（`src/review.ts`）。
 - 顾问：`advisor.md` + 目标与计划 markdown + 失败发现历史（验收+质检全部失败轮，详情完整保留并计入 fixed prompt 预算）+ 计划修订注入（有修订时）+ 同一 `review` packet（`src/goal/advisor.ts`）。失败历史与工具证据共同展示尝试和失败演化；真正超窗时按 `fixed_prompt_overflow` 明确退出。
 - 提取器排除隐藏编排消息、结果检查卡和 `pi-flow-advisor-direction`；手动顾问建议只影响执行模型。packet 带来源、coverage 和动态预算。所有 reviewer 在 pool 启动前共用同一个不可变 packet，prompt 全文参与 `inputHash`。
 - 验收与质检若证实文件在验证期间被并行修改，会丢弃该次结果、读取最新文件后重跑，并以最后一次完整结果为准。
