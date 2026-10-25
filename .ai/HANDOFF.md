@@ -21,7 +21,7 @@ PR: https://github.com/leonjean214/pi-flow/pull/4（base feature/report-language
 - 对 3129180 的 diff 中被删的行都是 main 重构替换掉的旧代码（独立质检报告刷新、`bindLiveReport`、旧 review 提示拼接）。
 
 ## 验证
-- 基线（fork/main da3f1d8，临时 worktree，已移除）：`npm ci` 通过；`npm test` 在 `review-smoke` 处断（该 smoke 在 `npm test` 里串联，短路）。逐个跑：除 flow/package/report-server/review 4 个 smoke 因 49327 被占而失败外全过。端口改 49399 + 隔离 `PI_CODING_AGENT_DIR` 后这 4 个全过。**没有复现任务单预期的 `englishCurrentTaskReviewPromptScenario` ENOENT。**
+- 基线（fork/main da3f1d8，临时 worktree，已移除）：`npm ci` 通过；`npm test` 在 `review-smoke` 处断（该 smoke 在 `npm test` 里串联，短路）。逐个跑：除 flow/package/report-server/review 4 个 smoke 因 49327 被占而失败外全过。端口改 49399 + 隔离 `PI_CODING_AGENT_DIR` 后这 4 个全过。本机没复现任务单预期的 `englishCurrentTaskReviewPromptScenario` ENOENT，但它在 GitHub CI（Linux / node 22）里复现，见下。
 - 整合分支：`npm ci` exit 0；`npm run check` exit 0；
   - 逐个跑 `tests/*smoke.mjs`：同样只有那 4 个因端口被占失败，与基线一致；
   - 端口改 49399 的拷贝里完整 `npm test` exit 0（18 个 "smoke ok"，footer smoke 因缺 `../footer.ts` 按设计跳过，与基线一致）。
@@ -31,3 +31,9 @@ PR: https://github.com/leonjean214/pi-flow/pull/4（base feature/report-language
 ## 风险 / 待 Claude 操作
 - 部署：把 `~/pi-flow` 更新到本分支前，注意在用 daemon 是协议 1、main 是协议 2（`Incompatible pi-flow report protocol 1; expected 2`）：部署后需重启运行中的 pi / report daemon。
 - 固定端口的 smoke 在 pi 运行时无法在本机直接跑，CI 或停掉 daemon 后再跑一次更稳。
+
+## CI 状态（PR #4）
+- PR 的 `check` 为红：`review smoke failed in englishCurrentTaskReviewPromptScenario`，ENOENT 读 `.flow/reviews/<id>.html`（`tests/review-smoke.mjs:1285` 附近，测试读报告时文件尚未写出，疑似异步竞态）。
+- **基线证明**：fork/main 自己的 push CI（run 40216341999，da3f1d8）在同一场景同一 ENOENT 失败；PR #3 的 CI（run 40167071627）同样为红。故非本次合并引入。
+- 因 `npm test` 串联短路，CI 里 review-smoke 之后的 smoke 没跑；这些在本机（端口隔离）已全过。
+- 本 PR 未修这个竞态（超出「整合」范围）；建议另开小单修复。
