@@ -283,7 +283,10 @@ function buildAuditPrompt(
 		goal.language,
 	);
 	const separator = goal.language === "en" ? ":" : "：";
-	const fixedPrompt = `${readPrompt("goal-audit", goal.language)}
+	const severity = goal.plan
+		? `\n\n${readPrompt("flow-review-severity", goal.language)}`
+		: "";
+	const fixedPrompt = `${readPrompt("goal-audit", goal.language)}${severity}
 
 ${goal.language === "en" ? "Goal" : "目标"}${separator}
 ${goal.text}${plan ? `\n\n${plan}` : ""}${goal.planChangeNote ? `\n\n${goal.planChangeNote}` : ""}${priorRounds ? `\n\n${priorRounds}` : ""}
