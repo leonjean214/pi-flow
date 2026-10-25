@@ -57,6 +57,7 @@ try {
 	await runScenario(disabledReviewDoesNotArmScenario);
 	await runScenario(reviewArmSaveFailureDoesNotExecuteScenario);
 	await runScenario(goalScopePromptScenario);
+	await runScenario(englishGoalScopePromptScenario);
 	await runScenario(currentTaskReviewPromptScenario);
 	await runScenario(englishCurrentTaskReviewPromptScenario);
 	await runScenario(configReadFailureNoticeScenario);
@@ -1189,6 +1190,9 @@ async function goalScopePromptScenario() {
 	});
 	const args = readFileSync(`${command}.args`, "utf8");
 	assert(args.includes("<goal>\nShip goal scoped review\n</goal>"), args);
+	assert(args.includes("## Flow 严重度分级"), args);
+	assert(args.includes("只有 P0/P1 才能驱动 FAIL"), args);
+	assert(args.includes("P2/P3 只记录，不阻塞"), args);
 	assert(args.includes("计划（plan.md）："), args);
 	assert(args.includes("Planned proof."), args);
 	assert(args.includes("目标文本用于限定质量问题的相关性"), args);
@@ -1200,6 +1204,29 @@ async function goalScopePromptScenario() {
 		!existsSync(join(state.cwd, ".flow", "reviews")),
 		"goal-scoped review created a standalone report",
 	);
+}
+
+async function englishGoalScopePromptScenario() {
+	const command = captureReviewCommand(
+		"PASS\nQuality OK\nEvidence: files=src/app.ts; commands=npm test\n",
+	);
+	writeReviewConfig("autoFix", command);
+	const state = createState();
+	const { runConfiguredReview } = await import(
+		`file://${join(srcOut, "review.js")}?english-goal-scope-${Date.now()}`
+	);
+	await runConfiguredReview(mockPi(state), mockContext(state), {
+		scope: {
+			kind: "goal",
+			language: "en",
+			goalText: "Ship goal scoped review",
+		},
+	});
+	const args = readFileSync(`${command}.args`, "utf8");
+	assert(args.includes("## Flow severity tiers"), args);
+	assert(args.includes("Only P0/P1 may drive FAIL"), args);
+	assert(args.includes("P2/P3 are recorded only, never block delivery"), args);
+	assert(args.includes("report it as P0"), args);
 }
 
 async function currentTaskReviewPromptScenario() {
@@ -1214,6 +1241,7 @@ async function currentTaskReviewPromptScenario() {
 	await commands.get("review").handler("", ctx);
 	const args = readFileSync(`${command}.args`, "utf8");
 	assert(args.includes("当前会话当前任务的交付质量"), args);
+	assert(!args.includes("## Flow 严重度分级"), args);
 	assert(args.includes("上下文证据："), args);
 	assert(args.includes("来源：原始 getBranch() 事件"), args);
 	assert(args.includes("Coverage："), args);
@@ -1242,6 +1270,7 @@ async function englishCurrentTaskReviewPromptScenario() {
 	});
 	const args = readFileSync(`${command}.args`, "utf8");
 	assert(args.includes("Delivery quality for the current task"), args);
+	assert(!args.includes("## Flow severity tiers"), args);
 	assert(args.includes("Context Evidence:"), args);
 	assert(args.includes("Source: raw getBranch() events"), args);
 	assert(args.includes("Coverage:"), args);

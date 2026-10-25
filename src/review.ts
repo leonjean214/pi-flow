@@ -1201,7 +1201,11 @@ function buildReviewEvidence(
 ) {
 	const separator = language === "en" ? ":" : "：";
 	const priorRounds = priorRoundsSection(history, round, language);
-	const fixedPrompt = `${readPrompt("review", language)}\n\n${language === "en" ? "Review target" : "审查对象"}${separator}\n${reviewScopeText(scope, language)}${priorRounds ? `\n\n${priorRounds}` : ""}\n\n${language === "en" ? "Context Evidence" : "上下文证据"}${separator}\n`;
+	const severity =
+		scope?.kind === "goal"
+			? `\n\n${readPrompt("flow-review-severity", language)}`
+			: "";
+	const fixedPrompt = `${readPrompt("review", language)}${severity}\n\n${language === "en" ? "Review target" : "审查对象"}${separator}\n${reviewScopeText(scope, language)}${priorRounds ? `\n\n${priorRounds}` : ""}\n\n${language === "en" ? "Context Evidence" : "上下文证据"}${separator}\n`;
 	return {
 		fixedPrompt,
 		evidence: buildContextEvidence({
@@ -1237,7 +1241,7 @@ function reviewScopeText(
 				changeNote ? `\n${changeNote}` : "",
 				"",
 				"The goal text limits issue relevance; the plan limits scope, steps, and acceptance criteria. Report only issues that affect this goal's delivery quality. Do not request new features, refactors, or optimizations outside the goal.",
-				"Scope completeness was already gated by the prior acceptance check: do not re-verify requirement coverage item by item. The acceptance verdict is not your evidence either; only files you actually read and commands you actually ran are. If you find concrete evidence that a requirement is actually unmet, report it as High severity.",
+				"Scope completeness was already gated by the prior acceptance check: do not re-verify requirement coverage item by item. The acceptance verdict is not your evidence either; only files you actually read and commands you actually ran are. If you find concrete evidence that a requirement is actually unmet, report it as P0.",
 				"Focus on implementation quality: logic defects, edge cases, error handling, races, fake or insufficient tests, regression risk.",
 			].join("\n");
 		return [
@@ -1248,7 +1252,7 @@ function reviewScopeText(
 			changeNote ? `\n${changeNote}` : "",
 			"",
 			"目标文本用于限定质量问题的相关性；计划用于限定 scope、步骤和验收口径。只报告影响该目标交付质量的问题。不要要求超出目标的新功能、新重构或新优化。",
-			"范围完整性已由前置验收把关：不要重复逐项验证需求覆盖。验收结论也不是你的证据，只有你实际读取的文件和实际运行的命令才是；若发现具体证据表明某项要求实际未完成，按高严重度报告。",
+			"范围完整性已由前置验收把关：不要重复逐项验证需求覆盖。验收结论也不是你的证据，只有你实际读取的文件和实际运行的命令才是；若发现具体证据表明某项要求实际未完成，按 P0 报告。",
 			"重心放在实现质量：逻辑缺陷、边界条件、错误处理、竞态、虚假或不充分的测试、回归风险。",
 		].join("\n");
 	}

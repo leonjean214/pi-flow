@@ -8,6 +8,7 @@ const EXTENSION_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export function readPrompt(
 	name:
 		| "goal-audit"
+		| "flow-review-severity"
 		| "review"
 		| "advisor"
 		| "grilling"
