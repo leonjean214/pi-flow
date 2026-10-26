@@ -1278,15 +1278,17 @@ async function englishCurrentTaskReviewPromptScenario() {
 	assert(!args.includes("会话记录"), args);
 	assert(!args.includes("相关文件线索"), args);
 	assert(!args.includes("Modified files:"), args);
-	const report = readFileSync(
-		join(
-			state.cwd,
-			".flow",
-			"reviews",
-			`${basename(state.sessionFile, ".jsonl")}.html`,
-		),
-		"utf8",
+	const reportPath = join(
+		state.cwd,
+		".flow",
+		"reviews",
+		`${basename(state.sessionFile, ".jsonl")}.html`,
 	);
+	const report = await waitFor(() => {
+		if (!existsSync(reportPath)) return;
+		const html = readFileSync(reportPath, "utf8");
+		return html.includes("Operation evidence:") && html;
+	}, "english review report was not written");
 	assert(
 		report.includes(
 			"The following content was provided to the review models as evidence.",
