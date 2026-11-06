@@ -5376,7 +5376,7 @@ function shellQuote(value) {
 }
 
 function proxyCommand(command) {
-	return shellScript(`exec '${command.replaceAll("'", "'\\''")}' "$@"`);
+	return shellScript(`exec '${command.replaceAll("'", "'\\''")}' "$@"`, false);
 }
 
 function script(output) {
@@ -5390,6 +5390,7 @@ function interruptOnceScript(output) {
 		path,
 		`#!/usr/bin/env node
 import fs from "node:fs";
+for await (const _ of process.stdin) {}
 const countPath = ${JSON.stringify(`${path}.count`)};
 const count = Number(fs.existsSync(countPath) ? fs.readFileSync(countPath, "utf8") : 0) + 1;
 fs.writeFileSync(countPath, String(count));
@@ -5467,7 +5468,7 @@ function countedScript(outputs, fallbackCase) {
 	});
 	writeFileSync(
 		path,
-		`#!/bin/sh\ncount_file='${path}.count'\ncount=$(cat "$count_file" 2>/dev/null || echo 0)\ncount=$((count + 1))\necho "$count" > "$count_file"\ncase "$count" in\n${files.map((file, index) => `${index + 1}) cat '${file}' ;;`).join("\n")}\n${fallbackCase.replace("{{last}}", files.at(-1))}\nesac\n`,
+		`#!/bin/sh\ncat > /dev/null\ncount_file='${path}.count'\ncount=$(cat "$count_file" 2>/dev/null || echo 0)\ncount=$((count + 1))\necho "$count" > "$count_file"\ncase "$count" in\n${files.map((file, index) => `${index + 1}) cat '${file}' ;;`).join("\n")}\n${fallbackCase.replace("{{last}}", files.at(-1))}\nesac\n`,
 		{ mode: 0o755 },
 	);
 	return path;
@@ -5507,16 +5508,20 @@ function jsonEventCommand(events) {
 	const path = join(bin, `events-${Math.random().toString(16).slice(2)}`);
 	writeFileSync(
 		path,
-		`#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(jsonEvents(events))});\n`,
+		`#!/usr/bin/env node\nfor await (const _ of process.stdin) {}\nprocess.stdout.write(${JSON.stringify(jsonEvents(events))});\n`,
 		{ mode: 0o755 },
 	);
 	return path;
 }
 
-function shellScript(body) {
+function shellScript(body, consumeStdin = true) {
 	mkdirSync(bin, { recursive: true });
 	const path = join(bin, `script-${Math.random().toString(16).slice(2)}`);
-	writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+	writeFileSync(
+		path,
+		`#!/bin/sh\n${consumeStdin ? "cat > /dev/null\n" : ""}${body}\n`,
+		{ mode: 0o755 },
+	);
 	return path;
 }
 
