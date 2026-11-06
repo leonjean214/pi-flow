@@ -197,6 +197,49 @@ async function lifecycleScenarios(out) {
 	console.log(
 		"stdin lifecycle: echo, early exit, ENOENT, timeout, abort, EPIPE passed",
 	);
+	const stalled = script(
+		"stalled-input",
+		'process.stdout.write("ready\\n");setInterval(()=>{},1000);',
+	);
+	const cleanup = script(
+		"timeout-cleanup",
+		'import {closeSync} from "node:fs";process.on("SIGTERM",()=>{closeSync(0);setTimeout(()=>{process.stdout.write("cleanup done\\n");process.exit(0);},300);});process.stdout.write("ready\\n");setInterval(()=>{},1000);',
+	);
+	const timedOutInputs = [];
+	for (const [name, path] of [
+		["stalled", stalled],
+		["cleanup", cleanup],
+	]) {
+		for (const stdin of [undefined, large]) {
+			const result = await runSpawnProcess({
+				...options,
+				args: [path],
+				stdin,
+				timeoutMs: 1000,
+			});
+			console.log(
+				JSON.stringify({
+					test: `timeout-${name}`,
+					bytes: Buffer.byteLength(stdin ?? ""),
+					kind: result.kind,
+					code: result.kind === "error" ? result.error.code : undefined,
+					ready: result.stdout.includes("ready"),
+					cleanup: result.stdout.includes("cleanup done"),
+				}),
+			);
+			timedOutInputs.push({ name, result });
+		}
+	}
+	for (const { name, result } of timedOutInputs) {
+		assert(result.stdout.includes("ready"), "timeout fixture did not start");
+		assert.equal(result.kind, "timeout", JSON.stringify(result));
+		if (name === "cleanup")
+			assert(
+				result.stdout.includes("cleanup done"),
+				"SIGTERM cleanup was interrupted",
+			);
+	}
+	console.log("blocked stdin timeout and graceful cleanup passed");
 }
 
 function fakePiSource() {
