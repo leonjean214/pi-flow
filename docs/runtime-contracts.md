@@ -141,6 +141,12 @@
 - 完成证据写入 `Verification` / `Outcome` / `Handoff`；不得把 `Success Criteria` 勾成完成。
 - 执行中不得修改 `Objective` / `Scope` / `Success Criteria`。
 
+## 子进程提示传输
+
+- 验收/顾问（`shared/pi-process.ts`）、质检（`shared/review-process.ts`）及并行 worker 的一次性 Pi 调用只在 argv 传模型、工具、扩展、会话等短参数；完整提示通过 UTF-8 stdin 发送并关闭输入，以 EOF 结束。大小提示使用同一路径，不把 Goal、Handoff 或检查正文塞入 argv/env，不新增内容裁剪或预算规则。无正文的共享 runner 调用也立即关闭输入。
+- 共享 runner 的输入写失败返回既有 `error` 结果并终止进程树；worker 输入写失败发 `process_error` 并结束进程树/控制连接。取消与超时继续使用既有收口语义：进入超时终止流程后，由该流程独占结果与 SIGTERM 宽限期，关闭输入产生的错误不得覆盖 `timeout` 或提前强杀；超时前的输入错误仍正常报错。正文发送前先安装错误及生命周期监听器。
+- 以上是进程间传输合同，不改变宿主自身对初始消息的解析（包括外层空白规范化）。RPC 驱动仍通过 stdin 传 JSONL 命令，不得把一次性裸提示写进 RPC 通道；Flow/session/worker 状态 owner 与 schema 不变。
+
 ## 角色模型
 
 - `modelRoles.advisor` 兼任两职：`/flow` 对齐、生成、repair 入口的会话模型，以及检查停滞时的顾问咨询模型；`modelRoles.executor` 用于 Flow 新步骤启动入口。配置对象只接受当前文档列出的字段，未知字段直接报错。

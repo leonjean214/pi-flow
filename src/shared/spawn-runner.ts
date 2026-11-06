@@ -23,6 +23,7 @@ export type SpawnRunnerResult =
 export interface SpawnRunnerOptions {
 	command: string;
 	args: string[];
+	stdin?: string;
 	cwd: string;
 	timeoutMs: number;
 	signal?: AbortSignal;
@@ -36,7 +37,7 @@ export function runSpawnProcess(
 		const child = spawn(options.command, options.args, {
 			cwd: options.cwd,
 			detached: process.platform !== "win32",
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["pipe", "pipe", "pipe"],
 		});
 		let stdout = "";
 		let stdoutLine = "";
@@ -100,8 +101,6 @@ export function runSpawnProcess(
 				}, TIMEOUT_PREKILL_GRACE_MS);
 			}, options.timeoutMs);
 		};
-		if (options.signal?.aborted) return abort();
-		options.signal?.addEventListener("abort", abort, { once: true });
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
 		child.stdout.on("data", (chunk: string) => {
@@ -138,6 +137,15 @@ export function runSpawnProcess(
 				timedOut ? { kind: "timeout", ...output() } : closeResult(code, signal),
 			),
 		);
+		child.stdin.on("error", (error) => {
+			// Timeout owns shutdown, including pipe errors caused by SIGTERM cleanup.
+			if (settled || timedOut) return;
+			killProcessTree(child, TIMEOUT_KILL_SIGNAL);
+			finish({ kind: "error", error, ...output() });
+		});
+		if (options.signal?.aborted) return abort();
+		options.signal?.addEventListener("abort", abort, { once: true });
+		child.stdin.end(options.stdin, "utf8");
 	});
 }
 
