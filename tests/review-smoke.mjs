@@ -3862,11 +3862,14 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 		`#!/bin/bash
 model=''
 previous=''
-prompt=''
+input="$0.stdin.$$"
+cat > "$input"
+prompt=$(cat "$input")
+exec < "$input"
+rm "$input"
 for argument in "$@"; do
   if [ "$previous" = '--model' ]; then model="$argument"; fi
   previous="$argument"
-  prompt="$argument"
 done
 case "$prompt" in
   *"# 顾问"*|*"# Advisor"*) exec ${shellQuote(defaultCommand)} "$@" ;;
@@ -3939,7 +3942,7 @@ function captureReviewCommand(output) {
 	);
 	writeFileSync(
 		path,
-		`#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  printf '%s\n---ARG---\n' "$1"\n  shift\ndone > '${path}.args'\nprintf '%s' ${shellQuote(assistantJson(output))}\n`,
+		`#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  printf '%s\n---ARG---\n' "$1"\n  shift\ndone > '${path}.args'\ncat >> '${path}.args'\nprintf '\\n---ARG---\\n' >> '${path}.args'\nprintf '%s' ${shellQuote(assistantJson(output))}\n`,
 		{ mode: 0o755 },
 	);
 	return path;

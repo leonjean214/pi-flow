@@ -4,7 +4,7 @@ import { rmSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { flowMainExtensionArgs } from "../../shared/child-extensions.js";
 import { readFlowConfig } from "../../shared/config.js";
 import { formatError } from "../../shared/guards.js";
@@ -15,7 +15,7 @@ import {
 	privateWorkerMessage,
 } from "../execution/worker-protocol.js";
 
-type WorkerProcess = ChildProcessByStdio<null, Readable, Readable>;
+type WorkerProcess = ChildProcessByStdio<Writable, Readable, Readable>;
 
 export interface WorkerSpawnOptions {
 	flowId: string;
@@ -143,12 +143,11 @@ export function spawnWorker(options: WorkerSpawnOptions): WorkerHandle {
 				"--session",
 				sessionPath,
 				"-p",
-				options.initialPrompt,
 			],
 			{
 				cwd: options.cwd,
 				detached: process.platform !== "win32",
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: ["pipe", "pipe", "pipe"],
 				env: {
 					...process.env,
 					...control.env,
@@ -169,6 +168,14 @@ export function spawnWorker(options: WorkerSpawnOptions): WorkerHandle {
 			finishExit(null, null, message);
 		});
 		child.on("close", finishExit);
+		child.stdin.on("error", (error) => {
+			if (exited || killed) return;
+			const message = formatError(error);
+			emitEvent({ type: "process_error", error: message });
+			if (child) killProcessTree(child, "SIGKILL");
+			finishExit(null, null, message);
+		});
+		child.stdin.end(options.initialPrompt, "utf8");
 	};
 
 	control.listen(spawnChild);

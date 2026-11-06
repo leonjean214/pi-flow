@@ -14,7 +14,8 @@ export async function runPiPrompt(
 	const events = collectAssistantEvents(onEvent);
 	const result = await runSpawnProcess({
 		command: config.command,
-		args: piPromptArgs(config, prompt),
+		args: piPromptArgs(config),
+		stdin: prompt,
 		cwd,
 		timeoutMs: config.timeoutMs,
 		signal,
@@ -48,7 +49,7 @@ function piFailureReason(
 	return `子进程被信号 ${result.signal ?? "unknown"} 终止。`;
 }
 
-export function piPromptArgs(config: ReviewerConfig, prompt: string) {
+export function piPromptArgs(config: ReviewerConfig) {
 	return [
 		"--no-session",
 		"--mode",
@@ -64,6 +65,5 @@ export function piPromptArgs(config: ReviewerConfig, prompt: string) {
 		config.excludeTools.join(","),
 		...openaiFastArgs(config.openaiFast),
 		"-p",
-		prompt,
 	];
 }
