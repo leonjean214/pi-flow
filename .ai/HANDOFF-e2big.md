@@ -65,8 +65,36 @@ Build artifacts are retained separately under `$HOME/work/e2big-artifacts/main-0
 
 ## Deployment and delivery boundary
 
-No shared installation, task runtime, credentials, or business worktree has been changed in this goal. No package publication or merge. The following goal must install the tested live-baseline commit and demonstrate that the original acceptance recovery gets past the failed spawn; no claim of task recovery is made here.
+The implementation goal left the shared installation and original task untouched. The subsequent operational validation below installs the tested live-baseline commit and demonstrates recovery past the failed spawn. No package publication or merge.
 
 PR: https://github.com/leonjean214/pi-flow/pull/7 (base `main`, head `fix/e2big`, leave open and unmerged). Both `fix/e2big` (minimal main PR) and `fix/e2big-live` (fixed live-baseline installation commit) are pushed to the owner fork. Do not install the main-only candidate over the feature-bearing live baseline.
+
+## Operational validation: original task recovered
+
+The shared remote Linux installation on the Windows build machine now uses tested live-baseline source `dee99a4b3c4f75d117a0ae3c15bde22852e817d5`, detached from the original `bc6ca69` baseline. The configured relative extension package resolves to that checkout and its `dist/index.js`. The main-only PR build was not installed over the feature-bearing live baseline.
+
+Installation on 2026-11-06 used the owner fork, verified that the fixed SHA belongs to `fix/e2big-live`, then ran on the remote host:
+
+```sh
+git -C "$HOME/pi-flow" fetch origin fix/e2big fix/e2big-live
+git -C "$HOME/pi-flow" checkout --detach dee99a4b3c4f75d117a0ae3c15bde22852e817d5
+# Invoked through the existing remote build entry, in that checkout:
+npm ci --silent && npm run build
+```
+
+Build exit 0. The installed spawn-runner/pi-process/review-process/parallel-spawner SHA-256 values exactly match the previously tested live artifacts: `9ef8283e9337aa2cccf3605af243a92e6293e13e5b1fbc91d071add67955e488`, `073f54639d3df0ba7de77d6fc44764b231ed218a9fbc4d5d287b834fc6a397b5`, `51fbc9cb206b30d5191df2641c3a1a6c46b0dfb0f58d0c6564d3b353fd57a28d`, `d283119000ba59e8c97853d3380fe0d7361c1e6ee1b5ed29cc3da9733acf407e`. Source checkout is clean. No script fix was needed; the existing remote dispatcher only updates its companion script checkout, not this pinned extension checkout.
+
+The original `flow-auto <original-worktree> <original-plan> --resume < /dev/null` was invoked once with `PR_AUTOLAND=/bin/false`. Its existing remote route sent `/flow go F2`; it did not select a stale local Flow or create another Flow. No task files, credentials, or global configuration were manually rewritten for deployment; the original dispatcher's normal auth synchronization was left intact.
+
+Recovery evidence (UTC):
+- 23:29:18.509: existing F2/Goal/checkpoint starts acceptance round 3; original session appends its matching start card.
+- 23:29:23.853 and 23:29:25.879: the two real auditor processes produce assistant `message_end` events, durably projected by the existing usage-ledger hook with auditor role, child/parent PIDs and the original session parent. Initial received contexts are about 59k tokens. These are the first durably located child message events, not a claim that the child's initial stdout event was archived.
+- 23:30:08: a new model outcome is already canonical, with the original check runId/inputHash retained.
+- 23:30:16.148: original session commits both new model outcomes and the completion boundary; canonical cursor advances from `acceptance_retry` to `acceptance_repair`. Both outcomes are ordinary business acceptance failures, not spawn/system failures.
+- The new run events and original-session appended interval contain no `spawn E2BIG`. Existing historical failure records were not deleted.
+
+Before/after evidence verifies unchanged Flow identity/creation time, Goal ID, original session byte prefix, starting snapshot, prior two check rounds, all three Goal/Handoff files, existing business HEAD/diff, original task file and extension settings. Normal checkpoint generation renewal and completed round-3 records are the recovery engine's writes, not manual state edits. The existing driver and remote log watcher remain running; their PIDs, task key, log offsets, and reconnect command are retained privately.
+
+Remaining issues are explicit: the existing report TCP endpoint initially times out, but acceptance still runs; the task's complete business gates remain failed and its existing unpublished business changes still need their own workflow. This repair does not claim to finish that task, weaken its standards, or fix those unrelated failures. No other Flow was stopped. The repair PR and business PR remain unmerged. This follow-up changes only handoff evidence; the previously successful Win/WSL full checks remain valid and were not rerun just to increase counts.
 
 Raw logs and deployment identity are kept in the private task handoff; this public handoff contains no original task text or machine identifiers.
