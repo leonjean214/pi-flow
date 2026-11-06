@@ -5269,11 +5269,14 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 		`#!/bin/bash
 model=''
 previous=''
-prompt=''
+input="$0.stdin.$$"
+cat > "$input"
+prompt=$(cat "$input")
+exec < "$input"
+rm "$input"
 for argument in "$@"; do
   if [ "$previous" = '--model' ]; then model="$argument"; fi
   previous="$argument"
-  prompt="$argument"
 done
 case "$prompt" in
   *"# 顾问"*|*"# Advisor"*) exec ${shellQuote(defaultCommand)} "$@" ;;
@@ -5339,6 +5342,8 @@ while [ "$#" -gt 0 ]; do
   printf '%s\n---ARG---\n' "$1"
   shift
 done > '${path}.args'
+cat >> '${path}.args'
+printf '\\n---ARG---\\n' >> '${path}.args'
 printf '%s' ${shellQuote(assistantJson(output))}
 `,
 		{ mode: 0o755 },
@@ -5359,6 +5364,8 @@ while [ "$#" -gt 0 ]; do
   printf '%s\n---ARG---\n' "$1"
   shift
 done > '${path}.args'
+cat >> '${path}.args'
+printf '\\n---ARG---\\n' >> '${path}.args'
 printf '%s' ${shellQuote(jsonEvents(assistantProgressEvents(output, "src/advisor.ts")))}
 `,
 		{ mode: 0o755 },
