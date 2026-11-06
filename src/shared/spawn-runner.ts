@@ -140,7 +140,8 @@ export function runSpawnProcess(
 			),
 		);
 		child.stdin.on("error", (error) => {
-			if (settled) return;
+			// Timeout owns shutdown, including pipe errors caused by SIGTERM cleanup.
+			if (settled || timedOut) return;
 			killProcessTree(child, TIMEOUT_KILL_SIGNAL);
 			finish({ kind: "error", error, ...output() });
 		});
