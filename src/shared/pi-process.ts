@@ -1,5 +1,6 @@
 import { collectAssistantEvents } from "./assistant-event-stream.js";
 import { childExtensionArgs } from "./child-extensions.js";
+import { childPrompt } from "./child-prompt.js";
 import type { ReviewerConfig } from "./config.js";
 import { openaiFastArgs } from "./openai-fast.js";
 import { runSpawnProcess, type SpawnRunnerResult } from "./spawn-runner.js";
@@ -16,7 +17,7 @@ export async function runPiPrompt(
 	const result = await runSpawnProcess({
 		command: config.command,
 		args: piPromptArgs(config),
-		stdin: prompt,
+		stdin: childPrompt(prompt),
 		cwd,
 		env: {
 			...process.env,

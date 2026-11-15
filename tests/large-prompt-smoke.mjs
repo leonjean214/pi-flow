@@ -11,6 +11,8 @@ const file = fileURLToPath(import.meta.url);
 const root = dirname(dirname(file));
 const large = `BEGIN-GOAL\n${"完整计划与中文交接，不得截断。\n".repeat(6000)}## Handoff\nEND-HANDOFF\n`;
 const small = "BEGIN-GOAL\n短计划\n## Handoff\nEND-HANDOFF\n";
+// Plan identity keys are NUL-joined; they reach acceptance prompts verbatim.
+const nul = "BEGIN-GOAL\n待确认：章节\0条目\0" + "1\n## Handoff\nEND-HANDOFF\n";
 
 if (process.argv[2] === "--probe") {
 	await probe(process.argv[3], process.argv[4], process.argv[5]);
@@ -39,7 +41,7 @@ if (process.argv[2] === "--probe") {
 		);
 		const failures = [];
 		for (const entry of ["pi", "review", "worker"]) {
-			for (const size of ["large", "small"]) {
+			for (const size of ["large", "small", "nul"]) {
 				const result = await new Promise((resolve) =>
 					execFile(
 						process.execPath,
@@ -65,7 +67,9 @@ if (process.argv[2] === "--probe") {
 }
 
 async function probe(out, entry, size) {
-	const prompt = size === "large" ? large : small;
+	const prompt = size === "large" ? large : size === "nul" ? nul : small;
+	// The child must never receive a raw NUL; it gets a visible stand-in instead.
+	const sent = prompt.split("\0").join("␀");
 	const load = (name) => import(pathToFileURL(join(out, "dist", name)).href);
 	const config = {
 		command: join(out, "fake-pi.mjs"),
@@ -118,11 +122,9 @@ async function probe(out, entry, size) {
 		assert(!result.text.includes("failed"), result.text);
 		summary = JSON.parse(result.text);
 	}
-	assert.equal(summary.bytes, Buffer.byteLength(prompt));
-	assert.equal(
-		summary.sha256,
-		createHash("sha256").update(prompt).digest("hex"),
-	);
+	if (size === "nul") assert.notEqual(sent, prompt);
+	assert.equal(summary.bytes, Buffer.byteLength(sent));
+	assert.equal(summary.sha256, createHash("sha256").update(sent).digest("hex"));
 	assert(summary.tail.includes("END-HANDOFF"));
 	assert.equal(summary.payloadInArgv, false);
 	assert.equal(summary.payloadInEnv, false);

@@ -9,6 +9,7 @@ import {
 	flowChildExtensionPath,
 	flowMainExtensionArgs,
 } from "../../shared/child-extensions.js";
+import { childPrompt } from "../../shared/child-prompt.js";
 import { readFlowConfig } from "../../shared/config.js";
 import { formatError } from "../../shared/guards.js";
 import {
@@ -184,7 +185,7 @@ export function spawnWorker(options: WorkerSpawnOptions): WorkerHandle {
 			if (child) killProcessTree(child, "SIGKILL");
 			finishExit(null, null, message);
 		});
-		child.stdin.end(options.initialPrompt, "utf8");
+		child.stdin.end(childPrompt(options.initialPrompt), "utf8");
 	};
 
 	control.listen(spawnChild);
