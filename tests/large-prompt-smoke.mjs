@@ -11,7 +11,7 @@ const file = fileURLToPath(import.meta.url);
 const root = dirname(dirname(file));
 const large = `BEGIN-GOAL\n${"完整计划与中文交接，不得截断。\n".repeat(6000)}## Handoff\nEND-HANDOFF\n`;
 const small = "BEGIN-GOAL\n短计划\n## Handoff\nEND-HANDOFF\n";
-// Plan identity keys are NUL-joined; they reach acceptance prompts verbatim.
+// A raw NUL in the prompt, whatever put it there.
 const nul = "BEGIN-GOAL\n待确认：章节\0条目\0" + "1\n## Handoff\nEND-HANDOFF\n";
 
 if (process.argv[2] === "--probe") {
@@ -41,7 +41,7 @@ if (process.argv[2] === "--probe") {
 		);
 		const failures = [];
 		for (const entry of ["pi", "review", "worker"]) {
-			for (const size of ["large", "small", "nul"]) {
+			for (const size of ["large", "small", "nul", "toolresult"]) {
 				const result = await new Promise((resolve) =>
 					execFile(
 						process.execPath,
@@ -66,11 +66,50 @@ if (process.argv[2] === "--probe") {
 	}
 }
 
+// The real case: a bash tool result carried NUL bytes, and evidence extraction
+// copies tool output verbatim into the acceptance prompt.
+async function toolResultPrompt(load) {
+	const { extractContextEvidence } = await load("shared/context-evidence.js");
+	const at = "2026-01-01T00:00:00.000Z";
+	const facts = extractContextEvidence([
+		{
+			type: "message",
+			id: "call",
+			timestamp: at,
+			message: {
+				role: "assistant",
+				stopReason: "toolUse",
+				content: [{ type: "toolCall", id: "t1", name: "bash", arguments: {} }],
+			},
+		},
+		{
+			type: "message",
+			id: "result",
+			timestamp: at,
+			message: {
+				role: "toolResult",
+				toolCallId: "t1",
+				content: [{ type: "text", text: "a.txt\0b.txt\0" }],
+			},
+		},
+	]);
+	const output = facts.operations[0].result.text;
+	assert(output.includes("\0"), "tool output should reach the prompt as is");
+	return `BEGIN-GOAL\n${output}\n## Handoff\nEND-HANDOFF\n`;
+}
+
 async function probe(out, entry, size) {
-	const prompt = size === "large" ? large : size === "nul" ? nul : small;
+	const load = (name) => import(pathToFileURL(join(out, "dist", name)).href);
+	const prompt =
+		size === "large"
+			? large
+			: size === "nul"
+				? nul
+				: size === "toolresult"
+					? await toolResultPrompt(load)
+					: small;
 	// The child must never receive a raw NUL; it gets a visible stand-in instead.
 	const sent = prompt.split("\0").join("␀");
-	const load = (name) => import(pathToFileURL(join(out, "dist", name)).href);
 	const config = {
 		command: join(out, "fake-pi.mjs"),
 		model: "test/model",
@@ -122,7 +161,7 @@ async function probe(out, entry, size) {
 		assert(!result.text.includes("failed"), result.text);
 		summary = JSON.parse(result.text);
 	}
-	if (size === "nul") assert.notEqual(sent, prompt);
+	if (size === "nul" || size === "toolresult") assert.notEqual(sent, prompt);
 	assert.equal(summary.bytes, Buffer.byteLength(sent));
 	assert.equal(summary.sha256, createHash("sha256").update(sent).digest("hex"));
 	assert(summary.tail.includes("END-HANDOFF"));
