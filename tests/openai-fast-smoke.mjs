@@ -97,12 +97,9 @@ try {
 		openaiFast: true,
 		extensions: keptExtensions,
 	};
-	const args = piPromptArgs(reviewer, "prompt");
-	const reviewArgs = reviewProcessArgs(reviewer, "prompt");
-	const standardArgs = piPromptArgs(
-		{ ...reviewer, openaiFast: false },
-		"prompt",
-	);
+	const args = piPromptArgs(reviewer);
+	const reviewArgs = reviewProcessArgs(reviewer);
+	const standardArgs = piPromptArgs({ ...reviewer, openaiFast: false });
 	assertChildArgs(args, flowChildExtensionPath());
 	assertChildArgs(reviewArgs, flowChildExtensionPath());
 	assert(
@@ -229,7 +226,7 @@ function assertChildArgs(args, childPath) {
 	for (const extension of keptExtensions)
 		assert(hasExtension(args, extension), joined);
 	assert(hasExtension(args, childPath), joined);
-	assert(args.at(-2) === "-p" && args.at(-1) === "prompt", joined);
+	assert(args.at(-1) === "-p" && !args.includes("prompt"), joined);
 	assert(extensionValues(args).at(-1) === childPath, joined);
 	assert(childPath.endsWith("/dist/child.js"), childPath);
 }
@@ -249,7 +246,7 @@ function writeJsonCommand(directory, name, events) {
 	const path = join(directory, name);
 	writeFileSync(
 		path,
-		`#!/usr/bin/env node\nfor (const event of ${JSON.stringify(events)}) process.stdout.write(JSON.stringify(event) + "\\n");\n`,
+		`#!/usr/bin/env node\nlet input = ""; for await (const chunk of process.stdin) input += chunk; if (input !== "prompt") throw new Error("stdin prompt mismatch");\nfor (const event of ${JSON.stringify(events)}) process.stdout.write(JSON.stringify(event) + "\\n");\n`,
 		{ mode: 0o755 },
 	);
 	return path;

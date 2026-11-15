@@ -1,5 +1,6 @@
 import { collectAssistantEvents } from "./assistant-event-stream.js";
 import { childExtensionArgs } from "./child-extensions.js";
+import { childPrompt } from "./child-prompt.js";
 import type { ReviewerConfig } from "./config.js";
 import { openaiFastArgs } from "./openai-fast.js";
 import { runSpawnProcess, type SpawnRunnerResult } from "./spawn-runner.js";
@@ -42,7 +43,8 @@ export async function runReviewProcessResult(
 	const events = collectAssistantEvents(onEvent);
 	const result = await runSpawnProcess({
 		command: config.command,
-		args: reviewProcessArgs(config, prompt),
+		args: reviewProcessArgs(config),
+		stdin: childPrompt(prompt),
 		cwd,
 		env: {
 			...process.env,
@@ -82,7 +84,7 @@ function reviewFailureReason(
 	return `Review terminated by signal ${result.signal ?? "unknown"}.`;
 }
 
-export function reviewProcessArgs(config: ReviewerConfig, prompt: string) {
+export function reviewProcessArgs(config: ReviewerConfig) {
 	return [
 		"--no-session",
 		"--mode",
@@ -98,6 +100,5 @@ export function reviewProcessArgs(config: ReviewerConfig, prompt: string) {
 		config.excludeTools.join(","),
 		...openaiFastArgs(config.openaiFast),
 		"-p",
-		prompt,
 	];
 }

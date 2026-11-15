@@ -130,8 +130,14 @@ try {
 
 	const spawned = [];
 	childProcess.spawn = (command, args, options) => {
-		spawned.push({ command, args, options });
+		const invocation = { command, args, options };
+		spawned.push(invocation);
 		const child = new EventEmitter();
+		child.stdin = new EventEmitter();
+		child.stdin.end = (input, encoding) => {
+			invocation.stdin = input;
+			assert.equal(encoding, "utf8");
+		};
 		child.stdout = new EventEmitter();
 		child.stderr = new EventEmitter();
 		child.stdout.setEncoding = () => child.stdout;
@@ -192,7 +198,10 @@ try {
 			["reviewer", String(process.pid)],
 		],
 	);
-	for (const { args, options } of spawned) {
+	for (const { args, options, stdin } of spawned) {
+		assert.equal(stdin, "ok");
+		assert(!args.includes("ok"));
+		assert.deepEqual(options.stdio, ["pipe", "pipe", "pipe"]);
 		assert(args.includes("--no-session"));
 		assert(args.some((arg) => arg.endsWith("child.js")));
 		assert.equal(

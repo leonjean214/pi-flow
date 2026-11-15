@@ -1,5 +1,6 @@
 import { collectAssistantEvents } from "./assistant-event-stream.js";
 import { childExtensionArgs } from "./child-extensions.js";
+import { childPrompt } from "./child-prompt.js";
 import type { ReviewerConfig } from "./config.js";
 import { openaiFastArgs } from "./openai-fast.js";
 import { runSpawnProcess, type SpawnRunnerResult } from "./spawn-runner.js";
@@ -15,7 +16,8 @@ export async function runPiPrompt(
 	const events = collectAssistantEvents(onEvent);
 	const result = await runSpawnProcess({
 		command: config.command,
-		args: piPromptArgs(config, prompt),
+		args: piPromptArgs(config),
+		stdin: childPrompt(prompt),
 		cwd,
 		env: {
 			...process.env,
@@ -54,7 +56,7 @@ function piFailureReason(
 	return `子进程被信号 ${result.signal ?? "unknown"} 终止。`;
 }
 
-export function piPromptArgs(config: ReviewerConfig, prompt: string) {
+export function piPromptArgs(config: ReviewerConfig) {
 	return [
 		"--no-session",
 		"--mode",
@@ -70,6 +72,5 @@ export function piPromptArgs(config: ReviewerConfig, prompt: string) {
 		config.excludeTools.join(","),
 		...openaiFastArgs(config.openaiFast),
 		"-p",
-		prompt,
 	];
 }

@@ -617,7 +617,10 @@ async function standaloneReportServerFailureContinuesScenario() {
 		"reviews",
 		`${basename(state.sessionFile, ".jsonl")}.html`,
 	);
-	const report = readFileSync(reportPath, "utf8");
+	const report = await readReviewReportWhen(
+		reportPath,
+		"以下内容已作为证据提供给质检模型",
+	);
 	assert(report.includes("以下内容已作为证据提供给质检模型"), report);
 	assert(report.includes("操作证据：\n（无）"), report);
 	assert(!report.includes("当前 session"), report);
@@ -799,11 +802,10 @@ async function reviewRequestArmsAndRunsScenario() {
 		"reviews",
 		`${basename(state.sessionFile, ".jsonl")}.html`,
 	);
-	await waitFor(
-		() => existsSync(armedReportPath),
-		"armed review report was not written",
+	const armedReport = await readReviewReportWhen(
+		armedReportPath,
+		"等待第 1 轮",
 	);
-	const armedReport = readFileSync(armedReportPath, "utf8");
 	assert(
 		armedReport.includes("执行中 · 完成后自动质检") &&
 			armedReport.includes("等待第 1 轮") &&
@@ -1282,15 +1284,13 @@ async function englishCurrentTaskReviewPromptScenario() {
 	assert(!args.includes("会话记录"), args);
 	assert(!args.includes("相关文件线索"), args);
 	assert(!args.includes("Modified files:"), args);
-	const report = readFileSync(
-		join(
-			state.cwd,
-			".flow",
-			"reviews",
-			`${basename(state.sessionFile, ".jsonl")}.html`,
-		),
-		"utf8",
+	const reportPath = join(
+		state.cwd,
+		".flow",
+		"reviews",
+		`${basename(state.sessionFile, ".jsonl")}.html`,
 	);
+	const report = await readReviewReportWhen(reportPath, "Operation evidence:");
 	assert(
 		report.includes(
 			"The following content was provided to the review models as evidence.",
@@ -1546,7 +1546,7 @@ async function standaloneReviewStallDisciplineScenario() {
 		"reviews",
 		`${basename(state.sessionFile, ".jsonl")}.html`,
 	);
-	const report = readFileSync(reportPath, "utf8");
+	const report = await readReviewReportWhen(reportPath, "第 10 轮");
 	assert(report.includes("第 1 轮") && report.includes("第 10 轮"), report);
 	assert(
 		report.includes(
@@ -1789,14 +1789,14 @@ async function standaloneReviewHardStopKeepsStatusReportScenario() {
 		state.statuses.join(" | "),
 	);
 	assert(latestReviewCheckpoint(state)?.phase === null);
-	const report = readFileSync(
+	const report = await readReviewReportWhen(
 		join(
 			state.cwd,
 			".flow",
 			"reviews",
 			`${basename(state.sessionFile, ".jsonl")}.html`,
 		),
-		"utf8",
+		"data-context-evidence",
 	);
 	assert(!report.includes("这条修复回合内容没有再次送检"), report);
 	const capturedArgs = readFileSync(`${command}.args`, "utf8");
@@ -1819,7 +1819,7 @@ function failForeverCommand(output, toolPath) {
 		: [JSON.parse(assistantJson(output))];
 	writeFileSync(
 		path,
-		`#!/bin/sh\ncount_file='${path}.count'\ncount=$(cat "$count_file" 2>/dev/null || echo 0)\ncount=$((count + 1))\necho "$count" > "$count_file"\nprintf '%s' ${shellQuote(jsonEvents(events))}\n`,
+		`#!/bin/sh\ncat > /dev/null\ncount_file='${path}.count'\ncount=$(cat "$count_file" 2>/dev/null || echo 0)\ncount=$((count + 1))\necho "$count" > "$count_file"\nprintf '%s' ${shellQuote(jsonEvents(events))}\n`,
 		{ mode: 0o755 },
 	);
 	return path;
@@ -3866,11 +3866,14 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 		`#!/bin/bash
 model=''
 previous=''
-prompt=''
+input="$0.stdin.$$"
+cat > "$input"
+prompt=$(cat "$input")
+exec < "$input"
+rm "$input"
 for argument in "$@"; do
   if [ "$previous" = '--model' ]; then model="$argument"; fi
   previous="$argument"
-  prompt="$argument"
 done
 case "$prompt" in
   *"# 顾问"*|*"# Advisor"*) exec ${shellQuote(defaultCommand)} "$@" ;;
@@ -3894,7 +3897,7 @@ function qualityMode(mode) {
 }
 
 function proxyCommand(command) {
-	return script(`exec '${command.replaceAll("'", "'\\''")}' "$@"`);
+	return script(`exec '${command.replaceAll("'", "'\\''")}' "$@"`, false);
 }
 
 function reviewCommand(outputs) {
@@ -3906,7 +3909,7 @@ function reviewCommand(outputs) {
 	});
 	writeFileSync(
 		path,
-		`#!/bin/sh\ncount_file='${path}.count'\ncount=$(cat "$count_file" 2>/dev/null || echo 0)\ncount=$((count + 1))\necho "$count" > "$count_file"\ncase "$count" in\n${files.map((file, index) => `${index + 1}) cat '${file}' ;;`).join("\n")}\n*) exit 9 ;;\nesac\n`,
+		`#!/bin/sh\ncat > /dev/null\ncount_file='${path}.count'\ncount=$(cat "$count_file" 2>/dev/null || echo 0)\ncount=$((count + 1))\necho "$count" > "$count_file"\ncase "$count" in\n${files.map((file, index) => `${index + 1}) cat '${file}' ;;`).join("\n")}\n*) exit 9 ;;\nesac\n`,
 		{ mode: 0o755 },
 	);
 	return path;
@@ -3921,6 +3924,7 @@ function interruptOnceReviewCommand(output) {
 		path,
 		`#!/usr/bin/env node
 import fs from "node:fs";
+for await (const _ of process.stdin) {}
 const countPath = ${JSON.stringify(`${path}.count`)};
 const count = Number(fs.existsSync(countPath) ? fs.readFileSync(countPath, "utf8") : 0) + 1;
 fs.writeFileSync(countPath, String(count));
@@ -3943,7 +3947,7 @@ function captureReviewCommand(output) {
 	);
 	writeFileSync(
 		path,
-		`#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  printf '%s\n---ARG---\n' "$1"\n  shift\ndone > '${path}.args'\nprintf '%s' ${shellQuote(assistantJson(output))}\n`,
+		`#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  printf '%s\n---ARG---\n' "$1"\n  shift\ndone > '${path}.args'\ncat >> '${path}.args'\nprintf '\\n---ARG---\\n' >> '${path}.args'\nprintf '%s' ${shellQuote(assistantJson(output))}\n`,
 		{ mode: 0o755 },
 	);
 	return path;
@@ -3983,15 +3987,19 @@ function jsonEventCommand(events) {
 	const path = join(bin, `events-${Math.random().toString(16).slice(2)}`);
 	writeFileSync(
 		path,
-		`#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(jsonEvents(events))});\n`,
+		`#!/usr/bin/env node\nfor await (const _ of process.stdin) {}\nprocess.stdout.write(${JSON.stringify(jsonEvents(events))});\n`,
 		{ mode: 0o755 },
 	);
 	return path;
 }
 
-function script(body) {
+function script(body, consumeStdin = true) {
 	const path = join(bin, `script-${Math.random().toString(16).slice(2)}`);
-	writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+	writeFileSync(
+		path,
+		`#!/bin/sh\n${consumeStdin ? "cat > /dev/null\n" : ""}${body}\n`,
+		{ mode: 0o755 },
+	);
 	return path;
 }
 
@@ -4296,6 +4304,14 @@ async function waitFor(read, message, timeoutMs = 12000) {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error(message);
+}
+
+async function readReviewReportWhen(path, expected) {
+	return waitFor(() => {
+		if (!existsSync(path)) return;
+		const html = readFileSync(path, "utf8");
+		return html.includes(expected) && html;
+	}, `review report did not contain ${expected}`);
 }
 
 function enableMonitorProbe(ctx, state, activeProgressSnapshot) {
