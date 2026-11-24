@@ -43,6 +43,7 @@ try {
 	await runScenario(acceptanceCheckedShaResumeAfterCheckoutScenario);
 	await runScenario(acceptanceCheckedShaSettlementScenario);
 	await runScenario(acceptanceCheckedShaConcurrentCheckoutScenario);
+	await runScenario(acceptanceCheckedShaReflogBackendsScenario);
 	await runScenario(acceptanceCheckedShaNoopReflogScenario);
 	await runScenario(checkDisciplineHelpersScenario);
 	await runScenario(goalTokenBudgetScenario);
@@ -622,6 +623,51 @@ async function acceptanceCheckedShaResumeAfterCheckoutScenario() {
 		return "deferred";
 	} });
 	assert(back.kind === "checkpoint_deferred", JSON.stringify(back));
+}
+
+async function acceptanceCheckedShaReflogBackendsScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	for (const mode of ["empty", "missing", "reftable", "disabled", "expire"]) {
+		const cwd = join(out, `acceptance-reflog-${mode}`);
+		mkdirSync(cwd, { recursive: true });
+		if (mode === "reftable") {
+			try { execFileSync("git", ["init", "--ref-format=reftable"], { cwd, stdio: "pipe" }); }
+			catch (error) {
+				if (!String(error.stderr).includes("unknown option")) throw error;
+				console.log("reftable scenario unavailable with installed Git");
+				continue;
+			}
+		}
+		const sha = commitFixture(cwd, "A");
+		const log = join(cwd, ".git/logs/HEAD");
+		if (mode === "empty") writeFileSync(log, "");
+		if (mode === "missing" || mode === "disabled") rmSync(log);
+		if (mode === "disabled") execFileSync("git", ["config", "core.logAllRefUpdates", "false"], { cwd });
+		const command = countedScript(["FAIL\n标准 1\n"], "*) cat '{{last}}' ;;");
+		writeConfig({ acceptance: true, command });
+		const ctx = mockContext(createState(), cwd);
+		const expected = mode === "disabled" || mode === "expire" ? null : sha;
+		let active;
+		for (const round of [1, 2]) {
+			active = undefined;
+			const audit = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round, ...options });
+			const result = await audit({ onCheckRun(value) {
+				if (!active && mode === "expire" && round === 1) writeFileSync(log, "");
+				active = value;
+				return "saved";
+			} });
+			const shaForRound = mode === "expire" && round === 2 ? sha : expected;
+			assert(result.kind === "result" && result.audit.checkedSha === shaForRound && active.checkedSha === shaForRound,
+				`${mode}/${round}: ${JSON.stringify(result)}`);
+			if (shaForRound) {
+				const result = await audit({ active, onCheckRun(value) {
+					assert(value.runId === active.runId && value.models[0].outcome?.result === "failed", JSON.stringify(value));
+					return "saved";
+				} });
+				assert(result.kind === "result" && result.audit.checkedSha === sha, JSON.stringify(result));
+			}
+		}
+	}
 }
 
 async function acceptanceCheckedShaNoopReflogScenario() {

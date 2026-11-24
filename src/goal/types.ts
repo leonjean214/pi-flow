@@ -55,7 +55,7 @@ export interface ActiveCheckRun {
 	runId: string;
 	checkedSha?: string | null;
 	/** Verified prefix of the worktree HEAD reflog at acceptance startup. */
-	checkedHeadCursor?: { bytes: number; digest: string };
+	checkedHeadCursor?: { count: number; digest: string };
 	/** 本轮检查启动时刻：同输入恢复沿用，用于轮次用时。 */
 	startedAt?: number;
 	inputHash: string;
