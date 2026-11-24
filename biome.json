@@ -4,6 +4,8 @@
 		"includes": [
 			"**",
 			"!dist",
+			"!src/goal/vendor/bash-syntax.js",
+			"!src/goal/vendor/bash-syntax.d.ts",
 			"!.flow",
 			"!.tmp",
 			"!**/.tmp-*",

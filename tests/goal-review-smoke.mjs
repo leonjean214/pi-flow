@@ -3798,6 +3798,33 @@ async function flowClosedRepairResumeScenario() {
 			}
 		}
 	}
+	// Bash executes the trailing command even when an assignment is rejected.
+	const subscriptCommandCases = [
+		"a[0]=x git push",
+		"a[i+1]=x git push",
+		"a[0]+=x git push",
+		"declare -A a; a[k ]=x git push",
+		'declare -A a; a["$(git push)"]=x',
+		'declare -A a=(["$(git push)"]=x)',
+		"declare -A a=([key]=value); git push",
+	];
+	const subscriptDataCases = [
+		"declare -A a=([); git push; x]=value)",
+		"declare -A a=([) ; git push ; x]=value)",
+		"declare -A a=([x)]=x [x; git push; y]=z)",
+		"declare -A a; a[x; git push; y]=1",
+	];
+	for (const [expected, cases] of [
+		[true, subscriptCommandCases],
+		[false, subscriptDataCases],
+	]) {
+		for (const command of cases) {
+			assert(
+				(await blocked(command)) === expected,
+				`closed subscript ${expected ? "allowed" : "blocked"} ${command}`,
+			);
+		}
+	}
 	writeFileSync(
 		path,
 		`${readFileSync(path, "utf8")}\n## 终审裁定（2026-11-24 11:5x，由主窗口签发）\n本轮必须修。\n`,

@@ -1,4 +1,10 @@
 import type { Language } from "../shared/config.js";
+import {
+	forEachChild,
+	parse,
+	type SyntaxNode,
+	type Word,
+} from "./vendor/bash-syntax.js";
 
 type RulingScope = { ruling: string };
 
@@ -90,17 +96,6 @@ export function withRulingScope(
 	return `${prefix}\n${scope.ruling}\n\n${prompt}`;
 }
 
-const shellCommandPrefixes = new Set([
-	"!",
-	"{",
-	"if",
-	"then",
-	"elif",
-	"else",
-	"while",
-	"until",
-	"do",
-]);
 const gitOptionsWithValue = new Set([
 	"-C",
 	"-c",
@@ -153,236 +148,73 @@ const wrapperSwitches: Readonly<Record<string, readonly string[]>> = {
 	sudo: ["-n", "--non-interactive", "-H", "-E", "--preserve-env"],
 };
 
-// Scan literal simple commands; never execute shell code or expand dynamic names.
-export function isGitPushCommand(command: string) {
-	let pos = 0;
-	let found = false;
-	// Only grammar positions use the logical cursor. Comments, literal quotes,
-	// and quoted heredoc bodies consume raw input instead.
-	function peek() {
-		while (command.startsWith("\\\n", pos)) pos += 2;
-		return command[pos] ?? "";
-	}
-
-	function eat(token: string) {
-		const start = pos;
-		for (const ch of token) {
-			if (peek() !== ch) {
-				pos = start;
-				return false;
+function literalWord(word: Word): string | undefined {
+	if (
+		word.parts?.some((part) => {
+			switch (part.type) {
+				case "Literal":
+				case "SingleQuoted":
+				case "AnsiCQuoted":
+					return false;
+				case "DoubleQuoted":
+					return part.parts.some((child) => child.type !== "Literal");
+				default:
+					return true;
 			}
-			pos++;
+		})
+	)
+		return undefined;
+	return word.value;
+}
+
+function isDirectPush(node: Extract<SyntaxNode, { type: "Command" }>) {
+	if (!node.name) return false;
+	const commandName = (word: string) => word.split("/").at(-1) ?? "";
+	let name = commandName(literalWord(node.name) ?? "");
+	let skipValue = false;
+	// Prefix assignments and redirects are not arguments. Their substitutions
+	// are still visited by the AST walk, as are substitutions in the arguments.
+	for (const arg of node.args) {
+		if (skipValue) {
+			skipValue = false;
+			continue;
 		}
-		return true;
-	}
-
-	const skipBlanks = () => {
-		while (/[ \t]/.test(peek())) pos++;
-	};
-	const skipComment = () => {
-		while (pos < command.length && command[pos] !== "\n") pos++;
-	};
-
-	function readName() {
-		if (!/[A-Za-z_]/.test(peek())) return false;
-		do pos++;
-		while (/[A-Za-z_0-9]/.test(peek()));
-		return true;
-	}
-
-	function readRedirect() {
-		const start = pos;
-		if (eat("{")) {
-			if (!readName() || !eat("}")) pos = start;
-		} else {
-			while (/[0-9]/.test(peek())) pos++;
-		}
-		const ops = ["<<<", "<<-", "<<", ">>", ">&", "<&", "<>", ">|", ">", "<"];
-		const op =
-			ops.find(eat) ?? (pos === start ? ["&>>", "&>"].find(eat) : undefined);
-		if (!op) pos = start;
-		return op;
-	}
-
-	function processSubstitution() {
-		if (!eat("<(") && !eat(">(")) return false;
-		scan(")");
-		return true;
-	}
-
-	function readWord(end: string, literal = false, paired = false) {
-		let word = "";
-		let quoted = false;
-		let quote = "";
-		while (pos < command.length) {
-			const ch = quote === "'" || quote === "$'" ? command[pos] : peek();
-			if (!ch) break;
-			if (!quote && !literal && processSubstitution()) {
-				word += "\0";
-				continue;
-			}
-			if (!quote && (ch === end || (!paired && /[\s;&|()<>]/.test(ch)))) break;
-			if (quote === "$'") {
-				if (ch === "'") quote = "";
-				else if (ch === "\\" && pos + 1 < command.length)
-					word += command[++pos];
-				else word += ch;
-				pos++;
-			} else if (!quote && (eat("$'") || eat('$"'))) {
-				quoted = true;
-				quote = command[pos - 1] === "'" ? "$'" : '"';
-			} else if (ch === "\\" && quote !== "'") {
-				const next = command[pos + 1];
-				if (!next || (quote && !/[\\"$`\n]/.test(next))) {
-					word += ch;
-					pos++;
-					continue;
-				}
-				if (next !== "\n") {
-					quoted = true;
-					word += next;
-				}
-				pos += 2;
-			} else if (ch === quote || (!quote && (ch === "'" || ch === '"'))) {
-				quoted = true;
-				quote = quote ? "" : ch;
-				pos++;
-			} else if (!literal && quote !== "'" && eat("${")) {
-				readWord("}", false, true);
-				eat("}");
-				word += "\0";
-			} else if (!literal && quote !== "'" && (eat("$((") || eat("$["))) {
-				const close = command[pos - 1] === "[" ? "]" : ")";
-				readWord(close, false, true);
-				eat(close === "]" ? "]" : "))");
-				word += "\0";
-			} else if (paired && !quote && end === ")" && eat("(")) {
-				readWord(")", false, true);
-				eat(")");
-			} else if (!literal && quote !== "'" && (eat("`") || eat("$("))) {
-				scan(ch === "`" ? "`" : ")");
-				word += "\0";
+		if (
+			shellWrappers.has(name) &&
+			(arg.type === "Assignment" ||
+				/^[A-Za-z_][A-Za-z_0-9]*\+?=/.test(arg.value))
+		)
+			continue;
+		const word = arg.type === "Word" ? literalWord(arg) : undefined;
+		if (word === undefined) return false;
+		const [option] = word.split("=", 1);
+		if (shellWrappers.has(name)) {
+			if (word.startsWith("-")) {
+				if (wrapperOptionsWithValue[name].includes(option))
+					skipValue = option === word;
+				else if (word !== "--" && !wrapperSwitches[name].includes(word))
+					return false;
 			} else {
-				word += ch;
-				pos++;
+				name = commandName(word);
 			}
-		}
-		return { word, quoted };
+		} else if (name === "git") {
+			if (word === "push") return true;
+			if (gitOptionsWithValue.has(option)) skipValue = option === word;
+			else if (!word.startsWith("--exec-path=") && !gitSwitches.has(word))
+				return false;
+		} else return false;
 	}
+	return false;
+}
 
-	function readArray() {
-		// Elements are words, not simple commands, but their substitutions run.
-		while (!found && pos < command.length) {
-			skipBlanks();
-			if (command[pos] === ")") {
-				pos++;
-				return;
-			}
-			if (command[pos] === "#") skipComment();
-			if (pos === command.length) return;
-			const start = pos;
-			readWord(")");
-			if (pos === start) pos++;
-		}
-	}
-
-	function skipHereDoc(delimiter: string, stripTabs: boolean, quoted: boolean) {
-		while (pos < command.length) {
-			let line = "";
-			while (pos < command.length && command[pos] !== "\n") {
-				if (!quoted && command[pos] === "\\" && pos + 1 < command.length) {
-					if (command[pos + 1] !== "\n") line += command.slice(pos, pos + 2);
-					pos += 2;
-				} else line += command[pos++];
-			}
-			if (pos < command.length) pos++;
-			if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter) return;
-		}
-	}
-
-	function scan(end = ""): void {
-		const heredocs: {
-			delimiter: string;
-			stripTabs: boolean;
-			quoted: boolean;
-		}[] = [];
-		let mode: "start" | "git" | "other" = "start";
-		let skipValue = false;
-		let wrapper = "";
-		while (!found && pos < command.length) {
-			skipBlanks();
-			if (pos === command.length) break;
-			const ch = command[pos];
-			if (ch === end) {
-				pos++;
-				return;
-			}
-			if (ch === "#") {
-				skipComment();
-				continue;
-			}
-			// Process substitution itself is a word, not a redirection.
-			const start = pos;
-			const processWord = eat("<(") || eat(">(");
-			pos = start;
-			const op = processWord ? undefined : readRedirect();
-			if (op) {
-				skipBlanks();
-				const heredoc = op === "<<" || op === "<<-";
-				const { word, quoted } = readWord(end, heredoc);
-				if (heredoc)
-					heredocs.push({ delimiter: word, stripTabs: op === "<<-", quoted });
-				continue;
-			}
-			if (/[;&|()\n]/.test(ch)) {
-				pos++;
-				if (ch === "(") scan(")");
-				if (ch === "\n") {
-					for (const { delimiter, stripTabs, quoted } of heredocs.splice(0))
-						skipHereDoc(delimiter, stripTabs, quoted);
-				}
-				mode = "start";
-				skipValue = false;
-				wrapper = "";
-				continue;
-			}
-			const assignment = readName() && (eat("+=") || eat("="));
-			if (assignment && eat("(")) {
-				readArray();
-				continue;
-			}
-			pos = start;
-			const { word, quoted } = readWord(end);
-			if (pos === start) {
-				pos++;
-				continue;
-			}
-			if (skipValue) {
-				skipValue = false;
-				continue;
-			}
-			const [option] = word.split("=", 1);
-			if (mode === "start") {
-				if ((!quoted && shellCommandPrefixes.has(word)) || assignment) continue;
-				if (wrapper && word.startsWith("-")) {
-					if (wrapperOptionsWithValue[wrapper].includes(option))
-						skipValue = option === word;
-					else if (word !== "--" && !wrapperSwitches[wrapper].includes(word))
-						mode = "other";
-					continue;
-				}
-				const name = word.split("/").at(-1) ?? "";
-				if (shellWrappers.has(name)) wrapper = name;
-				else mode = name === "git" ? "git" : "other";
-			} else if (mode === "git") {
-				if (word === "push") found = true;
-				else if (gitOptionsWithValue.has(option)) skipValue = option === word;
-				else if (!word.startsWith("--exec-path=") && !gitSwitches.has(word))
-					mode = "other";
-			}
-		}
-	}
-
-	scan();
+// Inspect parsed command nodes only; never run the script or reparse data as code.
+export function isGitPushCommand(command: string): boolean {
+	let found = false;
+	const visit = (node: SyntaxNode) => {
+		if (found) return;
+		if (node.type === "Command" && isDirectPush(node)) found = true;
+		else forEachChild(node, visit);
+	};
+	visit(parse(command));
 	return found;
 }
