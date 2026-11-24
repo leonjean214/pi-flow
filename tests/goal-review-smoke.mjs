@@ -627,7 +627,7 @@ async function acceptanceCheckedShaResumeAfterCheckoutScenario() {
 
 async function acceptanceCheckedShaReflogBackendsScenario() {
 	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
-	for (const mode of ["empty", "missing", "reftable", "disabled", "expire"]) {
+	for (const mode of ["empty", "missing", "reftable", "disabled", "disabled-existing", "disabled-empty", "expire"]) {
 		const cwd = join(out, `acceptance-reflog-${mode}`);
 		mkdirSync(cwd, { recursive: true });
 		if (mode === "reftable") {
@@ -640,9 +640,9 @@ async function acceptanceCheckedShaReflogBackendsScenario() {
 		}
 		const sha = commitFixture(cwd, "A");
 		const log = join(cwd, ".git/logs/HEAD");
-		if (mode === "empty") writeFileSync(log, "");
+		if (mode === "empty" || mode === "disabled-empty") writeFileSync(log, "");
 		if (mode === "missing" || mode === "disabled") rmSync(log);
-		if (mode === "disabled") execFileSync("git", ["config", "core.logAllRefUpdates", "false"], { cwd });
+		if (mode.startsWith("disabled")) execFileSync("git", ["config", "core.logAllRefUpdates", "false"], { cwd });
 		const command = countedScript(["FAIL\n标准 1\n"], "*) cat '{{last}}' ;;");
 		writeConfig({ acceptance: true, command });
 		const ctx = mockContext(createState(), cwd);
@@ -706,13 +706,14 @@ async function acceptanceCheckedShaNoopReflogScenario() {
 
 async function acceptanceCheckedShaConcurrentCheckoutScenario() {
 	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
-	for (const restore of [false, true]) {
-		const cwd = join(out, `acceptance-concurrent-checkout-${restore}`);
+	for (const [restore, disableAutoCreate] of [[false, false], [true, false], [false, true], [true, true]]) {
+		const cwd = join(out, `acceptance-concurrent-checkout-${restore}-${disableAutoCreate}`);
 		mkdirSync(cwd, { recursive: true });
 		const a = commitFixture(cwd, "A");
 		const b = commitFixture(cwd, "B");
 		const checkout = (sha) => execFileSync("git", ["checkout", "--detach", sha], { cwd, stdio: "ignore" });
 		checkout(a);
+		if (disableAutoCreate) execFileSync("git", ["config", "core.logAllRefUpdates", "false"], { cwd });
 		const command = shellScript(`
 			cat >/dev/null
 			git checkout --detach ${b} >/dev/null 2>&1 || exit 1

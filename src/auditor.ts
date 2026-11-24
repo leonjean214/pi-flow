@@ -276,15 +276,17 @@ function readCheckedHead(cwd: string): { sha: string | null; entries: string[] |
 	};
 	const sha = readSha();
 	if (!sha) return { sha, entries: null };
-	const config = git("config", "--type=bool", "--get", "core.logAllRefUpdates");
-	if (config.status !== 1 && !(config.status === 0 && config.stdout.trim() === "true")) {
-		const raw = git("config", "--get", "core.logAllRefUpdates");
-		if (raw.status !== 0 || raw.stdout.trim().toLowerCase() !== "always") return { sha, entries: null };
-	}
 	// `reflog show HEAD` can fall back to the branch log when the worktree log is empty.
 	const exists = git("reflog", "exists", "HEAD");
-	if (exists.status === 1 && !exists.stderr)
+	if (exists.status === 1 && !exists.stderr) {
+		// The setting controls auto-creation, not updates to existing reflogs.
+		const config = git("config", "--type=bool", "--get", "core.logAllRefUpdates");
+		if (config.status !== 1 && !(config.status === 0 && config.stdout.trim() === "true")) {
+			const raw = git("config", "--get", "core.logAllRefUpdates");
+			if (raw.status !== 0 || raw.stdout.trim().toLowerCase() !== "always") return { sha, entries: null };
+		}
 		return { sha, entries: readSha() === sha ? [] : null };
+	}
 	if (exists.status !== 0) return { sha, entries: null };
 	const newest = git("rev-parse", "--verify", "HEAD@{now}");
 	if (newest.status !== 0) {
