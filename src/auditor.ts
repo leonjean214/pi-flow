@@ -134,17 +134,19 @@ export async function auditGoalCompletion(
 		return { kind: "config_error", message: promptResult.message };
 	const prompt = promptResult.prompt;
 	const prior = options.active;
+	const head = readCheckedSha(ctx.cwd);
+	// A resumed reviewer still reads this worktree. A different HEAD therefore
+	// starts a new logical run; never carry outcomes across that boundary.
+	const sameHead = prior && (prior.checkedSha ?? null) === head;
 	let active = startCheckRun(
-		prior,
+		sameHead ? prior : null,
 		options.round,
 		checkInputHash("acceptance", prompt),
 		flowConfig.modelRoles.reviewers,
 	);
-	const resumed = active.runId === prior?.runId;
-	const head = resumed ? prior.checkedSha ?? null : readCheckedSha(ctx.cwd);
-	// A reviewer change can create a new runId while keeping unchanged model outcomes.
-	// Only carry those outcomes across runs if both runs checked the same known commit.
-	if (!resumed && prior && (head === null || head !== prior.checkedSha)) {
+	// A legacy/non-Git checkpoint may resume with unknown attribution, but
+	// its outcomes cannot be carried into a different runId.
+	if (head === null && active.runId !== prior?.runId) {
 		active.models = active.models.map((model) => ({ ...model, outcome: null }));
 	}
 	active = { ...active, checkedSha: head };

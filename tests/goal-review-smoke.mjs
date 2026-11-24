@@ -40,6 +40,7 @@ try {
 	await runScenario(checkRunRecoveryRulesScenario);
 	await runScenario(acceptanceCheckedShaRecoveryScenario);
 	await runScenario(acceptanceCheckedShaCacheScenario);
+	await runScenario(acceptanceCheckedShaResumeAfterCheckoutScenario);
 	await runScenario(checkDisciplineHelpersScenario);
 	await runScenario(goalTokenBudgetScenario);
 	await runScenario(flowAcceptancePromptIncludesPlanScenario);
@@ -541,14 +542,16 @@ async function acceptanceCheckedShaRecoveryScenario() {
 	}
 	const first = await capture(1);
 	assert(first.checkedSha === firstSha, JSON.stringify(first));
-	const secondSha = commitFixture(cwd, "after acceptance started");
 	const resumed = await capture(1, first);
 	assert(resumed.runId === first.runId && resumed.checkedSha === firstSha, JSON.stringify(resumed));
+	const secondSha = commitFixture(cwd, "after acceptance started");
+	const replaced = await capture(1, first);
+	assert(replaced.runId !== first.runId && replaced.checkedSha === secondSha, JSON.stringify(replaced));
 	const next = await capture(2, first);
 	assert(next.runId !== first.runId && next.checkedSha === secondSha, JSON.stringify(next));
 	const { checkedSha: _legacyMissing, ...legacy } = first;
 	const legacyResumed = await capture(1, legacy);
-	assert(legacyResumed.runId === first.runId && legacyResumed.checkedSha === null, JSON.stringify(legacyResumed));
+	assert(legacyResumed.runId !== first.runId && legacyResumed.checkedSha === secondSha, JSON.stringify(legacyResumed));
 }
 
 async function acceptanceCheckedShaCacheScenario() {
@@ -582,6 +585,39 @@ async function acceptanceCheckedShaCacheScenario() {
 		assert(final.kind === "result" && final.audit.checkedSha === secondSha && final.audit.complete,
 			`stale reviewer outcome: ${JSON.stringify(final)}`);
 	}
+}
+
+async function acceptanceCheckedShaResumeAfterCheckoutScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	const cwd = join(out, "acceptance-resume-after-checkout");
+	mkdirSync(cwd, { recursive: true });
+	const reviewer = join(bin, "acceptance-git-reviewer");
+	writeFileSync(reviewer, `#!/bin/sh\ncat >/dev/null\nhead=$(git rev-parse HEAD) || exit 1\nprintf '%s' ${shellQuote(assistantJson("FAIL\nHEAD: "))} | sed "s/HEAD: /HEAD: $head/"\n`, { mode: 0o755 });
+	writeConfig({ acceptance: true, command: reviewer, models: [
+		{ model: "test/first", thinking: "off" }, { model: "test/second", thinking: "off" },
+	] });
+	const a = commitFixture(cwd, "A");
+	const ctx = mockContext(createState(), cwd);
+	const audit = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round: 1, ...options });
+	let checkpoint;
+	await audit({ onCheckRun(value) { checkpoint = value; return "deferred"; } });
+	checkpoint.models[0].outcome = { result: "failed", summary: "stale A", details: "FAIL\nstale A\n" };
+	const b = commitFixture(cwd, "B");
+	let resumed;
+	const result = await audit({ active: checkpoint, onCheckRun(value, expected) {
+		assert(expected === (resumed?.generation ?? checkpoint.generation), "wrong checkpoint generation");
+		resumed ??= value;
+		return "saved";
+	} });
+	assert(result.kind === "result" && result.audit.checkedSha === b && !result.audit.complete &&
+		result.audit.raw.includes(b) && !result.audit.raw.includes("stale A") && resumed.runId !== checkpoint.runId,
+		JSON.stringify({ a, b, checkpoint, result }));
+	execFileSync("git", ["checkout", "--detach", a], { cwd, stdio: "ignore" });
+	const back = await audit({ active: checkpoint, onCheckRun(value) {
+		assert(value.runId === checkpoint.runId && value.checkedSha === a && value.models[0].outcome, JSON.stringify(value));
+		return "deferred";
+	} });
+	assert(back.kind === "checkpoint_deferred", JSON.stringify(back));
 }
 
 async function flowAcceptancePromptIncludesPlanScenario() {
