@@ -157,8 +157,10 @@ const wrapperSwitches: Readonly<Record<string, readonly string[]>> = {
 export function isGitPushCommand(command: string) {
 	let pos = 0;
 	let found = false;
-	const redirect = /(?:[0-9]+)?(?:<<<|<<-|<<|>>|>&|<&|<>|>\||>|<)|&>>?/y;
+	const redirect =
+		/(?:[0-9]+|\{[A-Za-z_][A-Za-z_0-9]*\})?(?:<<<|<<-|<<|>>|>&|<&|<>|>\||>|<)|&>>?/y;
 	const assignment = /^[A-Za-z_][A-Za-z_0-9]*=/;
+	const arrayAssignment = /[A-Za-z_][A-Za-z_0-9]*\+?=\(/y;
 	const continued = () => command.startsWith("\\\n", pos);
 	const skipBlanks = () => {
 		while (pos < command.length) {
@@ -207,6 +209,24 @@ export function isGitPushCommand(command: string) {
 		return { word, quoted };
 	}
 
+	function readArray() {
+		// Elements are words, not simple commands, but their substitutions run.
+		while (!found && pos < command.length) {
+			skipBlanks();
+			if (command[pos] === ")") {
+				pos++;
+				return;
+			}
+			if (command[pos] === "#") {
+				while (pos < command.length && command[pos] !== "\n") pos++;
+			}
+			if (pos === command.length) return;
+			const start = pos;
+			readWord(")");
+			if (pos === start) pos++;
+		}
+	}
+
 	function scan(end = ""): void {
 		const heredocs: { delimiter: string; stripTabs: boolean }[] = [];
 		let mode: "start" | "git" | "other" = "start";
@@ -229,7 +249,7 @@ export function isGitPushCommand(command: string) {
 			if (op) {
 				pos += op.length;
 				skipBlanks();
-				const heredoc = /^\d*<<-?$/.test(op);
+				const heredoc = /(?<!<)<<-?$/.test(op);
 				const { word } = readWord(end, heredoc);
 				if (heredoc)
 					heredocs.push({ delimiter: word, stripTabs: op.endsWith("-") });
@@ -255,6 +275,12 @@ export function isGitPushCommand(command: string) {
 				mode = "start";
 				skipValue = false;
 				wrapper = "";
+				continue;
+			}
+			arrayAssignment.lastIndex = pos;
+			if (arrayAssignment.test(command)) {
+				pos = arrayAssignment.lastIndex;
+				readArray();
 				continue;
 			}
 			const start = pos;
@@ -287,7 +313,8 @@ export function isGitPushCommand(command: string) {
 			} else if (mode === "git") {
 				if (word === "push") found = true;
 				else if (gitOptionsWithValue.has(option)) skipValue = option === word;
-				else if (!gitSwitches.has(word)) mode = "other";
+				else if (!word.startsWith("--exec-path=") && !gitSwitches.has(word))
+					mode = "other";
 			}
 		}
 	}

@@ -3715,6 +3715,15 @@ async function flowClosedRepairResumeScenario() {
 		"echo `git push`",
 		'echo "$(git push)"',
 		"command env GIT_TRACE=1 /usr/bin/git push",
+		"git {fd}>/dev/null push",
+		"git --exec-path=/usr/lib/git-core push",
+		"git 3>/tmp/log push",
+		"git >&3 push",
+		"git {fd}>&- push",
+		"git --git-dir=repo --work-tree=wt push",
+		"a=(x); git push",
+		'a=("$(git push)")',
+		"(git push) || :",
 	])
 		assert(await blocked(push), `closed repair resume allowed ${push}`);
 	for (const other of [
@@ -3736,6 +3745,14 @@ async function flowClosedRepairResumeScenario() {
 		// Indirect execution is outside the guard; do not interpret strings as shell.
 		'bash -c "git push"',
 		"eval git push",
+		`example=(git push); printf '%s\\n' "\${example[*]}"`,
+		"declare -a cmd=(git push)",
+		"cmd+=(git push)",
+		"f() { local -a cmd=(git push origin b); }",
+		"(echo git push) || :",
+		"git --exec-path=/usr/lib/git-core status",
+		"git --exec-path push",
+		"git status {fd}>push",
 	])
 		assert(!(await blocked(other)), `closed repair resume blocked ${other}`);
 	writeFileSync(
