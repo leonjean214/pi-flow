@@ -190,6 +190,12 @@ import {
 	trackCompletionAuditStatus as trackCompletionAuditStatusState,
 	yieldForGoalReviewCard,
 } from "./review-orchestration.js";
+import {
+	isGitPushCommand,
+	rulingScope,
+	rulingScopeNotice,
+	withRulingScope,
+} from "./ruling-scope.js";
 import type {
 	ActiveCheckRun,
 	CheckRoundAdvisor,
@@ -696,10 +702,18 @@ export function registerGoalRuntime(pi: ExtensionAPI) {
 
 	registerRuntimePart(pi, "goal:tool_call", () => {
 		pi.on("tool_call", (event, ctx) => {
-			if (event.toolName !== "edit" && event.toolName !== "write") return;
 			const state = goalStateForSession(ctx);
 			const goal = state.activeGoal;
 			if (!goal) return;
+			if (
+				goal.status === "active" &&
+				event.toolName === "bash" &&
+				typeof event.input.command === "string" &&
+				isGitPushCommand(event.input.command) &&
+				currentRulingScope(ctx, goal)
+			)
+				return { block: true, reason: rulingScopeNotice(goal.language) };
+			if (event.toolName !== "edit" && event.toolName !== "write") return;
 			const planPath = activeGoalPlanPath(ctx, goal);
 			if (!planPath || !toolResultWritesPath(event.input, ctx, planPath))
 				return;
@@ -1487,7 +1501,11 @@ async function handleGoalStateReviewFailure(
 			!sendAdvisorCard(goalRuntimeState.extensionApi, ctx, {
 				advice,
 				language: advisedGoal.language,
-				content: repairPrompt,
+				content: withRulingScope(
+					repairPrompt,
+					currentRulingScope(ctx, advisedGoal),
+					advisedGoal.language,
+				),
 				deliveryId: repairDeliveryId,
 				triggerTurn: true,
 			}).delivered
@@ -3849,15 +3867,21 @@ function sendRuntimePrompt(
 	} = {},
 ) {
 	const language = options.language ?? runtimeLanguage();
-	return sendOrchestrationPrompt(pi, ctx, prompt, {
-		customType: options.hideFromChecks
-			? ADVISOR_DIRECTION_PROMPT_TYPE
-			: "pi-flow-goal-prompt",
-		followUp: options.deliverAsFollowUp || !ctx.isIdle?.(),
-		errorPrefix:
-			language === "en" ? "Goal prompt send failed" : "目标提示发送失败",
-		language,
-	});
+	const goal = goalStateForSession(ctx).activeGoal;
+	return sendOrchestrationPrompt(
+		pi,
+		ctx,
+		withRulingScope(prompt, currentRulingScope(ctx, goal), language),
+		{
+			customType: options.hideFromChecks
+				? ADVISOR_DIRECTION_PROMPT_TYPE
+				: "pi-flow-goal-prompt",
+			followUp: options.deliverAsFollowUp || !ctx.isIdle?.(),
+			errorPrefix:
+				language === "en" ? "Goal prompt send failed" : "目标提示发送失败",
+			language,
+		},
+	);
 }
 
 function formatStatus(ctx: StatusContext, goal: ActiveGoal | undefined) {
@@ -4219,6 +4243,11 @@ function toolResultWritesPath(
 		typeof input.path === "string" &&
 		resolve(ctx.cwd, input.path) === resolve(ctx.cwd, planPath)
 	);
+}
+
+function currentRulingScope(ctx: StatusContext, goal: ActiveGoal | undefined) {
+	const path = goal && activeGoalPlanPath(ctx, goal);
+	return path ? rulingScope(readPlanText(path) ?? "") : undefined;
 }
 
 function activeGoalPlanPath(ctx: StatusContext, goal: ActiveGoal) {

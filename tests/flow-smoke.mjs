@@ -4018,6 +4018,21 @@ async function workerResumeCursorScenario() {
 			executionPrompt.includes("Do Goal 3"),
 		`fresh worker lost the execution prompt: ${executionPrompt.slice(0, 120)}`,
 	);
+	const ruling = "## 监工裁定（11-24 11:21）\n结单通过。";
+	for (const index of [1, 2]) {
+		const path = join(dir, flow.goals[index].file);
+		writeFileSync(path, `${readFileSync(path, "utf8")}\n\n${ruling}\n`);
+	}
+	assert(
+		workerInitialPrompt(dir, flow, 1) === holdPrompt,
+		"ruling changed the check hold path",
+	);
+	const scoped = workerInitialPrompt(dir, flow, 2);
+	assert(
+		scoped.includes("本轮只更新记录，不得改代码、不得提交推送") &&
+			scoped.includes(ruling),
+		"worker execution prompt lost ruling scope",
+	);
 }
 
 async function flowTargetRoutingScenario() {

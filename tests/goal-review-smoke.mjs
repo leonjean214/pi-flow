@@ -78,6 +78,8 @@ try {
 	await runScenario(flowAcceptanceConfigErrorPauseRespectsFlowLockScenario);
 	await runScenario(flowQualityMidLoopConfigErrorPausesScenario);
 	await runScenario(flowQualityRepairCursorSurvivesAbortScenario);
+	await runScenario(flowClosedRepairResumeScenario);
+	await runScenario(flowClosedContinuationScenario);
 	await runScenario(flowRepairCursorRetryAutoResumeKeepsFullPromptScenario);
 	await runScenario(flowCheckHardCapPausesScenario);
 	await runScenario(flowAcceptanceHardCapDeliveryFailureScenario);
@@ -3643,6 +3645,122 @@ async function flowQualityRepairCursorSurvivesAbortScenario() {
 	assert(
 		qualityStartsAfterResume === qualityStartsBeforeResume,
 		"paused quality repair resume restarted the quality check instead of continuing the repair",
+	);
+}
+
+async function flowClosedRepairResumeScenario() {
+	const command = captureCommand("FAIL\n质量不达标\n");
+	writeConfig({ acceptance: false, quality: true, command });
+	const cwd = join(out, "flow-closed-repair-resume");
+	const sessionFile = join(cwd, "goal-session.jsonl");
+	writeFlow(cwd, sessionFile);
+	const state = createState();
+	const { handlers, module } = await loadGoalExtension(state);
+	const ctx = mockContext(state, cwd, sessionFile);
+	await module.startGoalFromFlow("Flow objective", ctx);
+	for (const stopReason of ["stop", "aborted"]) {
+		await handlers.get("agent_end")(
+			{ messages: [{ role: "assistant", stopReason }] },
+			ctx,
+		);
+	}
+	assert(
+		readFlow(cwd).goals[0].completionCursor === "quality_repair",
+		"expected paused repair",
+	);
+	const path = join(cwd, ".flow", "F1", "G1-login.md");
+	const ruling =
+		"## 监工补充裁定（2026-11-24 11:2x，据 a194）\n偏差结单：本轮只做簿记。";
+	writeFileSync(path, `${readFileSync(path, "utf8")}\n\n${ruling}\n`);
+	assert(
+		(await module.resumePausedGoalFromFlow(ctx)) === "resumed",
+		"expected resume",
+	);
+	const prompt = state.sentMessages.at(-1);
+	assert(
+		prompt.includes("本轮只更新记录，不得改代码、不得提交推送") &&
+			prompt.includes(ruling),
+		`closed repair resume lost ruling scope: ${prompt}`,
+	);
+	const blocked = async (command) =>
+		(
+			await handlers.get("tool_call")(
+				{ toolName: "bash", input: { command } },
+				ctx,
+			)
+		)?.block === true;
+	for (const push of [
+		"git push",
+		"git -C repo push origin b",
+		"cd x && git push -u origin b",
+	])
+		assert(await blocked(push), `closed repair resume allowed ${push}`);
+	for (const other of [
+		"git status",
+		"echo push",
+		"git log --grep=push",
+		"echo git push",
+	])
+		assert(!(await blocked(other)), `closed repair resume blocked ${other}`);
+	writeFileSync(
+		path,
+		`${readFileSync(path, "utf8")}\n## 主窗口终审裁定（2026-11-24 11:5x）\n本轮必须修。\n`,
+	);
+	assert(
+		!(await blocked("git push")),
+		"newer ruling did not restore normal push behavior",
+	);
+	await handlers.get("agent_end")(
+		{ messages: [{ role: "assistant", stopReason: "aborted" }] },
+		ctx,
+	);
+	assert(
+		(await module.resumePausedGoalFromFlow(ctx)) === "resumed",
+		"expected resume after repair authorization",
+	);
+	assert(
+		state.sentMessages.at(-1) === "继续",
+		"newer ruling did not restore the short resume prompt",
+	);
+}
+
+async function flowClosedContinuationScenario() {
+	writeConfig({ acceptance: false, quality: false });
+	const cwd = join(out, "flow-closed-continuation");
+	const sessionFile = join(cwd, "goal-session.jsonl");
+	writeFlow(cwd, sessionFile);
+	const state = createState();
+	const { handlers, module } = await loadGoalExtension(state);
+	const ctx = mockContext(state, cwd, sessionFile);
+	await module.startGoalFromFlow("Flow objective", ctx);
+	const path = join(cwd, ".flow", "F1", "G1-login.md");
+	const original = readFileSync(path, "utf8");
+	const push = () =>
+		handlers.get("tool_call")(
+			{ toolName: "bash", input: { command: "git push" } },
+			ctx,
+		);
+	assert(!(await push())?.block, "unruled goal blocked push");
+	writeFileSync(path, `${original}\n文档示例：\`<!-- flow-closed -->\`\n`);
+	assert(!(await push())?.block, "quoted marker was mistaken for a ruling");
+	writeFileSync(path, `${original}\n<!-- flow-closed -->\n`);
+	assert((await push())?.block, "standalone closure marker did not block push");
+	const ruling =
+		"- 监工裁定（2026-11-24T11:21:21-05:00）：偏差结单，本轮只簿记不重跑";
+	writeFileSync(
+		path,
+		`${original.replace("## Success Criteria\n", `## Success Criteria\n${ruling}\n`)}\n## 监工补充裁定（2026-11-24 10:2x）\n继续修。\n`,
+	);
+	assert(
+		(await module.continueActiveGoalIfIdle(ctx)) === "continued",
+		"expected automatic continuation",
+	);
+	const message = state.sentMessages.at(-1);
+	assert(
+		typeof message === "string" &&
+			message.includes(ruling) &&
+			message.includes("本轮只更新记录"),
+		"automatic continuation lost the newer dated ruling",
 	);
 }
 
