@@ -157,10 +157,19 @@ const wrapperSwitches: Readonly<Record<string, readonly string[]>> = {
 export function isGitPushCommand(command: string) {
 	let pos = 0;
 	let found = false;
-	const redirect =
-		/(?:[0-9]+|\{[A-Za-z_][A-Za-z_0-9]*\})?(?:<<<|<<-|<<|>>|>&|<&|<>|>\||>|<)|&>>?/y;
-	const assignment = /^[A-Za-z_][A-Za-z_0-9]*=/;
-	const arrayAssignment = /[A-Za-z_][A-Za-z_0-9]*\+?=\(/y;
+	// Match continuations at unquoted token boundaries without rewriting quoted
+	// text or the raw lines used to find heredoc delimiters.
+	const join = String.raw`(?:\\\n)*`;
+	const name = `[A-Za-z_]${join}(?:[A-Za-z_0-9]${join})*`;
+	const redirect = new RegExp(
+		String.raw`(?:(?:[0-9]${join})+|\{${join}${name}\}${join})?(?:<<<|<<-|<<|>>|>&|<&|<>|>\||>|<)|&>>?`,
+		"y",
+	);
+	const assignment = new RegExp(`^${name}=`);
+	const arrayAssignment = new RegExp(
+		String.raw`${name}(?:\+${join})?=${join}\(`,
+		"y",
+	);
 	const continued = () => command.startsWith("\\\n", pos);
 	const skipBlanks = () => {
 		while (pos < command.length) {
@@ -221,6 +230,11 @@ export function isGitPushCommand(command: string) {
 				while (pos < command.length && command[pos] !== "\n") pos++;
 			}
 			if (pos === command.length) return;
+			if (command.startsWith("<(", pos) || command.startsWith(">(", pos)) {
+				pos += 2;
+				scan(")");
+				continue;
+			}
 			const start = pos;
 			readWord(")");
 			if (pos === start) pos++;
