@@ -53,6 +53,9 @@ export interface ActiveCheckRun {
 	generation: string;
 	/** 逻辑检查运行标识：崩溃恢复沿用，新运行重建。 */
 	runId: string;
+	checkedSha?: string | null;
+	/** Verified prefix of the worktree HEAD reflog at acceptance startup. */
+	checkedHeadCursor?: { count: number; digest: string };
 	/** 本轮检查启动时刻：同输入恢复沿用，用于轮次用时。 */
 	startedAt?: number;
 	inputHash: string;
@@ -67,6 +70,7 @@ export interface CheckRound {
 	models?: CheckModelSnapshot[];
 	advisor?: CheckRoundAdvisor;
 	elapsedMs?: number;
+	checkedSha?: string | null;
 }
 
 export interface CheckPhase {

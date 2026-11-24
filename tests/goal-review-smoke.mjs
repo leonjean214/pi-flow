@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
 	cpSync,
 	existsSync,
@@ -37,6 +38,13 @@ try {
 	await runScenario(reviewAggregateKeepsPassedDetailsScenario);
 	await runScenario(checksValidationScenario);
 	await runScenario(checkRunRecoveryRulesScenario);
+	await runScenario(acceptanceCheckedShaRecoveryScenario);
+	await runScenario(acceptanceCheckedShaCacheScenario);
+	await runScenario(acceptanceCheckedShaResumeAfterCheckoutScenario);
+	await runScenario(acceptanceCheckedShaSettlementScenario);
+	await runScenario(acceptanceCheckedShaConcurrentCheckoutScenario);
+	await runScenario(acceptanceCheckedShaReflogBackendsScenario);
+	await runScenario(acceptanceCheckedShaNoopReflogScenario);
 	await runScenario(checkDisciplineHelpersScenario);
 	await runScenario(goalTokenBudgetScenario);
 	await runScenario(flowAcceptancePromptIncludesPlanScenario);
@@ -509,6 +517,281 @@ async function checkRunRecoveryRulesScenario() {
 	);
 }
 
+function commitFixture(cwd, message) {
+	const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+	git("init", "-q");
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+		"-c", "commit.gpgsign=false", "commit", "-qm", message, "--allow-empty");
+	return git("rev-parse", "HEAD");
+}
+
+async function acceptanceCheckedShaRecoveryScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	const cwd = join(out, "acceptance-sha-recovery");
+	mkdirSync(cwd, { recursive: true });
+	writeConfig({ acceptance: true, quality: false, command: captureCommand("PASS\nOK\n") });
+	const firstSha = commitFixture(cwd, "before acceptance");
+	const ctx = mockContext(createState(), cwd);
+	async function capture(round, active) {
+		let checkpoint;
+		const result = await auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, {
+			round, active,
+			onCheckRun(value) {
+				checkpoint = JSON.parse(JSON.stringify(value));
+				return "deferred";
+			},
+		});
+		assert(result.kind === "checkpoint_deferred" && checkpoint, JSON.stringify(result));
+		return checkpoint;
+	}
+	const first = await capture(1);
+	assert(first.checkedSha === firstSha, JSON.stringify(first));
+	const resumed = await capture(1, first);
+	assert(resumed.runId === first.runId && resumed.checkedSha === firstSha, JSON.stringify(resumed));
+	const secondSha = commitFixture(cwd, "after acceptance started");
+	const replaced = await capture(1, first);
+	assert(replaced.runId !== first.runId && replaced.checkedSha === secondSha, JSON.stringify(replaced));
+	const next = await capture(2, first);
+	assert(next.runId !== first.runId && next.checkedSha === secondSha, JSON.stringify(next));
+	const { checkedSha: _legacyMissing, ...legacy } = first;
+	const legacyResumed = await capture(1, legacy);
+	assert(legacyResumed.runId !== first.runId && legacyResumed.checkedSha === secondSha, JSON.stringify(legacyResumed));
+}
+
+async function acceptanceCheckedShaCacheScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	const cwd = join(out, "acceptance-sha-cache");
+	mkdirSync(cwd, { recursive: true });
+	const pass = captureCommand("PASS\nOK\n证据：文件=src/app.ts；命令=npm test\n");
+	const unchanged = { model: "test/unchanged", thinking: "off", command: pass };
+	const changed = { model: "test/changed", thinking: "off", command: pass };
+	writeConfig({ acceptance: true, command: pass, models: [unchanged, changed] });
+	const firstSha = commitFixture(cwd, "A");
+	const ctx = mockContext(createState(), cwd);
+	const audit = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round: 1, ...options });
+	let first;
+	await audit({ onCheckRun(value) { first = value; return "deferred"; } });
+	assert(first?.checkedSha === firstSha, JSON.stringify(first));
+	first.models[0].outcome = { result: "failed", summary: "old FAIL from A", details: "FAIL\nold FAIL from A\nstandard 1\n" };
+	const secondSha = commitFixture(cwd, "B");
+	writeConfig({ acceptance: true, command: pass, models: [unchanged, { ...changed, model: "test/replacement" }] });
+	// Model the case where the persisted input hash is unchanged across the reviewer swap.
+	let newInput;
+	await audit({ onCheckRun(value) { newInput = value; return "deferred"; } });
+	assert(first.models[0].key === newInput.models[0].key && first.models[1].key !== newInput.models[1].key,
+		"only the second reviewer key should change");
+	first.inputHash = newInput.inputHash;
+	for (const prior of [first, { ...first, checkedSha: null }]) {
+		let started;
+		const final = await audit({ active: prior, onCheckRun(value) { started ??= value; return "saved"; } });
+		assert(started.runId !== prior.runId && started.models.every((model) => model.outcome === null),
+			`stale cached reviewer: ${JSON.stringify(started)}`);
+		assert(final.kind === "result" && final.audit.checkedSha === secondSha && final.audit.complete,
+			`stale reviewer outcome: ${JSON.stringify(final)}`);
+	}
+}
+
+async function acceptanceCheckedShaResumeAfterCheckoutScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	const cwd = join(out, "acceptance-resume-after-checkout");
+	mkdirSync(cwd, { recursive: true });
+	const reviewer = join(bin, "acceptance-git-reviewer");
+	writeFileSync(reviewer, `#!/bin/sh\ncat >/dev/null\nhead=$(git rev-parse HEAD) || exit 1\nprintf '%s' ${shellQuote(assistantJson("FAIL\nHEAD: "))} | sed "s/HEAD: /HEAD: $head/"\n`, { mode: 0o755 });
+	writeConfig({ acceptance: true, command: reviewer, models: [
+		{ model: "test/first", thinking: "off" }, { model: "test/second", thinking: "off" },
+	] });
+	const a = commitFixture(cwd, "A");
+	const ctx = mockContext(createState(), cwd);
+	const audit = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round: 1, ...options });
+	let checkpoint;
+	await audit({ onCheckRun(value) { checkpoint = value; return "deferred"; } });
+	checkpoint.models[0].outcome = { result: "failed", summary: "stale A", details: "FAIL\nstale A\n" };
+	const b = commitFixture(cwd, "B");
+	let resumed;
+	const result = await audit({ active: checkpoint, onCheckRun(value, expected) {
+		assert(expected === (resumed?.generation ?? checkpoint.generation), "wrong checkpoint generation");
+		resumed ??= value;
+		return "saved";
+	} });
+	assert(result.kind === "result" && result.audit.checkedSha === b && !result.audit.complete &&
+		result.audit.raw.includes(b) && !result.audit.raw.includes("stale A") && resumed.runId !== checkpoint.runId,
+		JSON.stringify({ a, b, checkpoint, result }));
+	execFileSync("git", ["checkout", "--detach", a], { cwd, stdio: "ignore" });
+	const back = await audit({ active: checkpoint, onCheckRun(value) {
+		assert(value.runId !== checkpoint.runId && value.checkedSha === a &&
+			value.models.every((model) => !model.outcome), JSON.stringify(value));
+		return "deferred";
+	} });
+	assert(back.kind === "checkpoint_deferred", JSON.stringify(back));
+}
+
+async function acceptanceCheckedShaReflogBackendsScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	for (const mode of ["empty", "missing", "reftable", "disabled", "disabled-existing", "disabled-empty", "expire"]) {
+		const cwd = join(out, `acceptance-reflog-${mode}`);
+		mkdirSync(cwd, { recursive: true });
+		if (mode === "reftable") {
+			try { execFileSync("git", ["init", "--ref-format=reftable"], { cwd, stdio: "pipe" }); }
+			catch (error) {
+				if (!String(error.stderr).includes("unknown option")) throw error;
+				console.log("reftable scenario unavailable with installed Git");
+				continue;
+			}
+		}
+		const sha = commitFixture(cwd, "A");
+		const log = join(cwd, ".git/logs/HEAD");
+		if (mode === "empty" || mode === "disabled-empty") writeFileSync(log, "");
+		if (mode === "missing" || mode === "disabled") rmSync(log);
+		if (mode.startsWith("disabled")) execFileSync("git", ["config", "core.logAllRefUpdates", "false"], { cwd });
+		const command = countedScript(["FAIL\n标准 1\n"], "*) cat '{{last}}' ;;");
+		writeConfig({ acceptance: true, command });
+		const ctx = mockContext(createState(), cwd);
+		const expected = mode === "disabled" || mode === "expire" ? null : sha;
+		let active;
+		for (const round of [1, 2]) {
+			active = undefined;
+			const audit = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round, ...options });
+			const result = await audit({ onCheckRun(value) {
+				if (!active && mode === "expire" && round === 1) writeFileSync(log, "");
+				active = value;
+				return "saved";
+			} });
+			const shaForRound = mode === "expire" && round === 2 ? sha : expected;
+			assert(result.kind === "result" && result.audit.checkedSha === shaForRound && active.checkedSha === shaForRound,
+				`${mode}/${round}: ${JSON.stringify(result)}`);
+			if (shaForRound) {
+				const result = await audit({ active, onCheckRun(value) {
+					assert(value.runId === active.runId && value.models[0].outcome?.result === "failed", JSON.stringify(value));
+					return "saved";
+				} });
+				assert(result.kind === "result" && result.audit.checkedSha === sha, JSON.stringify(result));
+			}
+		}
+	}
+}
+
+async function acceptanceCheckedShaNoopReflogScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	const cwd = join(out, "acceptance-noop-reflog");
+	mkdirSync(cwd, { recursive: true });
+	const sha = commitFixture(cwd, "A");
+	const reset = () => execFileSync("git", ["reset", "HEAD"], { cwd, stdio: "ignore" });
+	const command = countedScript(["FAIL\n标准 1\n"], "*) cat '{{last}}' ;;");
+	writeConfig({ acceptance: true, command });
+	const ctx = mockContext(createState(), cwd);
+	const audit = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round: 1, ...options });
+	const log = join(cwd, ".git/logs/HEAD");
+	const before = readFileSync(log, "utf8");
+	let active;
+	const first = await audit({ onCheckRun(value) {
+		if (!active) reset();
+		active = value;
+		return "saved";
+	} });
+	assert(readFileSync(log, "utf8").slice(before.length).startsWith(`${sha} ${sha} `), "fixture did not append A→A");
+	assert(first.kind === "result" && first.audit.checkedSha === sha && active.checkedSha === sha, JSON.stringify(first));
+	reset();
+	const resumed = await audit({ active, onCheckRun(value) {
+		assert(value.runId === active.runId && value.checkedSha === sha && value.models[0].outcome?.result === "failed", JSON.stringify(value));
+		return "saved";
+	} });
+	assert(resumed.kind === "result" && resumed.audit.checkedSha === sha && scriptRunCount(command) === 1, JSON.stringify(resumed));
+	// The endpoint is still A, but a truncated prefix cannot prove continuity.
+	writeFileSync(log, readFileSync(log, "utf8").split("\n").at(-2) + "\n");
+	let rebuilt;
+	await audit({ active, onCheckRun(value) { rebuilt = value; return "deferred"; } });
+	assert(rebuilt?.checkedSha === sha && rebuilt.runId !== active.runId &&
+		rebuilt.models.every((model) => !model.outcome), JSON.stringify(rebuilt));
+}
+
+async function acceptanceCheckedShaConcurrentCheckoutScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	for (const [restore, disableAutoCreate] of [[false, false], [true, false], [false, true], [true, true]]) {
+		const cwd = join(out, `acceptance-concurrent-checkout-${restore}-${disableAutoCreate}`);
+		mkdirSync(cwd, { recursive: true });
+		const a = commitFixture(cwd, "A");
+		const b = commitFixture(cwd, "B");
+		const checkout = (sha) => execFileSync("git", ["checkout", "--detach", sha], { cwd, stdio: "ignore" });
+		checkout(a);
+		if (disableAutoCreate) execFileSync("git", ["config", "core.logAllRefUpdates", "false"], { cwd });
+		const command = shellScript(`
+			cat >/dev/null
+			git checkout --detach ${b} >/dev/null 2>&1 || exit 1
+			seen=$(git rev-parse HEAD) || exit 1
+			${restore ? `git checkout --detach ${a} >/dev/null 2>&1 || exit 1` : ""}
+			printf '%s' ${shellQuote(assistantJson("FAIL\nstandard 1; HEAD: "))} | sed "s/HEAD: /HEAD: $seen/"
+		`);
+		writeConfig({ acceptance: true, command });
+		const ctx = mockContext(createState(), cwd);
+		const run = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round: 1, ...options });
+		const checkpoints = [];
+		const result = await run({ onCheckRun(value) { checkpoints.push(value); return "saved"; } });
+		assert(checkpoints[0]?.checkedSha === a && checkpoints.at(-1)?.checkedSha === null &&
+			result.kind === "result" && result.audit.raw.includes(b) && result.audit.checkedSha === null,
+			JSON.stringify({ restore, a, b, checkpoints, result }));
+		checkout(b);
+		await run({ active: checkpoints.at(-1), onCheckRun(value) {
+			assert(value.runId !== checkpoints[0].runId && value.checkedSha === b &&
+				value.models.every((model) => !model.outcome), JSON.stringify(value));
+			return "deferred";
+		} });
+	}
+}
+
+async function acceptanceCheckedShaSettlementScenario() {
+	const { latestGoalCompletion } = await import(`file://${join(srcOut, "flow/completion.js")}`);
+	const { completeGoalWithFact } = await import(`file://${join(srcOut, "flow/goal-completion.js")}`);
+	const { writeFlow: save } = await import(`file://${join(srcOut, "flow/store.js")}`);
+	const { settleParallelRun } = await import(`file://${join(srcOut, "flow/parallel/fan-in.js")}`);
+	const { writeWorkerCompletion } = await import(`file://${join(srcOut, "flow/parallel/worker-artifact.js")}`);
+	const artifacts = [];
+	for (const parallel of [false, true]) {
+		writeConfig({ acceptance: true, advisor: { enabled: false }, command: sequenceScript([
+			"FAIL\n标准 1\n", "PASS\n验收 OK\n证据：文件=src/app.ts；命令=npm test\n",
+		]) });
+		const cwd = join(out, `acceptance-sha-settlement-${parallel}`);
+		const sessionFile = join(cwd, "goal-session.jsonl");
+		writeFlow(cwd, sessionFile);
+		const dir = join(cwd, ".flow", "F1");
+		const a = commitFixture(cwd, "acceptance A");
+		const state = createState();
+		const { handlers, module } = await loadGoalExtension(state);
+		const ctx = mockContext(state, cwd, sessionFile);
+		const end = () => handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		let artifactPath;
+		if (parallel) {
+			artifactPath = writeWorkerArtifactFixture(dir, sessionFile);
+			await startWorkerArtifactGoal(module, ctx, dir, artifactPath);
+		} else {
+			await module.startGoalFromFlow("Flow objective", ctx);
+		}
+		await end();
+		const b = commitFixture(cwd, "acceptance B");
+		await end();
+		const flow = readFlow(cwd);
+		const fact = latestGoalCompletion(ctx);
+		assert(fact, `missing ${parallel ? "worker" : "serial"} completion fact`);
+		if (parallel) {
+			writeWorkerCompletion(dir, 0, fact, "P1");
+			const worker = JSON.parse(readFileSync(artifactPath, "utf8"));
+			assert(worker.status === "complete", JSON.stringify(worker));
+			artifacts.push(["worker", worker.checks, [a, b]]);
+			settleParallelRun(ctx, dir, { ...flow, parallelRun: { id: "P1", goalIndexes: [0] } },
+				[{ goalIndex: 0, fact: null, exitCode: 0, exitSignal: null, stderr: null }],
+				{ requireSuccessfulExit: true });
+		} else {
+			save(dir, completeGoalWithFact(dir, flow, 0, fact));
+		}
+		const final = readFlow(cwd);
+		assert(final.goals[0].status === "complete", JSON.stringify(final));
+		artifacts.push([parallel ? "fan-in" : "serial", final.goals[0].checks, [a, b]]);
+	}
+	const observed = artifacts.map(([surface, checks, shas]) => ({
+		surface, actual: checks.acceptance.rounds.map((round) => round.checkedSha), expected: shas,
+	}));
+	assert(observed.every(({ actual, expected }) => JSON.stringify(actual) === JSON.stringify(expected)), JSON.stringify(observed));
+}
+
 async function flowAcceptancePromptIncludesPlanScenario() {
 	const command = captureCommand(
 		"PASS\n验收 OK\n证据：文件=src/app.ts；命令=npm test\n",
@@ -517,6 +800,7 @@ async function flowAcceptancePromptIncludesPlanScenario() {
 	const cwd = join(out, "flow-acceptance-plan");
 	const sessionFile = join(cwd, "goal-session.jsonl");
 	writeFlow(cwd, sessionFile);
+	const checkedSha = commitFixture(cwd, "serial acceptance");
 	const state = createState();
 	const { handlers, module } = await loadGoalExtension(state);
 	const ctx = mockContext(state, cwd, sessionFile);
@@ -540,7 +824,8 @@ async function flowAcceptancePromptIncludesPlanScenario() {
 	assert(!args.includes("计划修订检测"), "unchanged plan injected change note");
 	const flow = readFlow(cwd);
 	assert(
-		flow.goals[0].checks.acceptance.rounds[0].summary === "验收 OK" &&
+		flow.goals[0].checks.acceptance.rounds[0].checkedSha === checkedSha &&
+			flow.goals[0].checks.acceptance.rounds[0].summary === "验收 OK" &&
 			flow.goals[0].checks.acceptance.rounds[0].details.includes("验收 OK"),
 		JSON.stringify(flow.goals[0].checks),
 	);
@@ -2724,6 +3009,8 @@ async function workerAcceptanceHardCapHandoffScenario() {
 	const cwd = join(out, "worker-acceptance-hard-cap");
 	const sessionFile = join(cwd, "worker-session.jsonl");
 	writeFlow(cwd, sessionFile);
+	const firstSha = commitFixture(cwd, "worker first acceptance");
+	let laterSha;
 	const dir = join(cwd, ".flow", "F1");
 	const artifactPath = writeWorkerArtifactFixture(dir, sessionFile);
 	const state = createState();
@@ -2749,6 +3036,7 @@ async function workerAcceptanceHardCapHandoffScenario() {
 	try {
 		await startWorkerArtifactGoal(module, ctx, dir, artifactPath);
 		for (let round = 1; round <= 10; round += 1) {
+			if (round === 2) laterSha = commitFixture(cwd, "worker second acceptance");
 			await handlers.get("agent_end")(
 				{ messages: [{ role: "assistant", stopReason: "stop" }] },
 				ctx,
@@ -2773,6 +3061,9 @@ async function workerAcceptanceHardCapHandoffScenario() {
 		readFileSync(join(dir, "flow.json"), "utf8") === flowJsonBefore,
 		"worker hard cap touched parent flow.json",
 	);
+	const checkedRounds = artifact.checks.acceptance.rounds;
+	assert(checkedRounds[0]?.checkedSha === firstSha && checkedRounds[1]?.checkedSha === laterSha,
+		`worker checked SHA missing: ${JSON.stringify(checkedRounds)}`);
 	const workerCheckArgs = readFileSync(`${command}.args`, "utf8");
 	assert(
 		workerCheckArgs.includes("计划修订检测") &&
@@ -4643,6 +4934,7 @@ async function flowAcceptancePostDeliveryLockFailureScenario() {
 	const cwd = join(out, "flow-acceptance-post-delivery-lock");
 	const sessionFile = join(cwd, "goal-session.jsonl");
 	writeFlow(cwd, sessionFile);
+	const checkedSha = commitFixture(cwd, "same commit across reviewer changes");
 	const { acquireFlowLock } = await import(
 		`file://${join(srcOut, "flow/lock.js")}?post-acceptance=${Date.now()}`
 	);
@@ -4692,7 +4984,8 @@ async function flowAcceptancePostDeliveryLockFailureScenario() {
 	flow = readFlow(cwd);
 	assert(
 		flow.goals[0].checks.acceptance.active === null &&
-			flow.goals[0].checks.acceptance.rounds[0]?.result === "failed",
+			flow.goals[0].checks.acceptance.rounds[0]?.result === "failed" &&
+			flow.goals[0].checks.acceptance.rounds[0]?.checkedSha === checkedSha,
 		JSON.stringify(flow.goals[0].checks.acceptance),
 	);
 	assert(

@@ -293,6 +293,7 @@ function checkRound(entry: ReviewHistoryEntry): CheckRound {
 		...(entry.models ? { models: entry.models } : {}),
 		...(entry.advisor ? { advisor: entry.advisor } : {}),
 		...(entry.elapsedMs !== undefined ? { elapsedMs: entry.elapsedMs } : {}),
+		...(entry.checkedSha !== undefined ? { checkedSha: entry.checkedSha } : {}),
 	};
 }
 

@@ -113,6 +113,7 @@ export function recordGoalReview(
 				),
 				...(keepDetails && details ? { details } : {}),
 				...(audit.models ? { models: audit.models } : {}),
+				checkedSha: audit.checkedSha ?? null,
 				...(audit.elapsedMs !== undefined
 					? { elapsedMs: audit.elapsedMs }
 					: {}),
@@ -813,6 +814,7 @@ function reviewRound(entry: ReviewHistoryEntry) {
 		summary: entry.summary,
 		...(entry.details ? { details: entry.details } : {}),
 		...(entry.models ? { models: entry.models } : {}),
+		...(entry.checkedSha !== undefined ? { checkedSha: entry.checkedSha } : {}),
 	};
 }
 

@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ActiveCheckRun, CheckModelOutcome } from "./goal/types.js";
 import type { ReviewCheckpointResult } from "./review/types.js";
@@ -69,6 +71,7 @@ export interface GoalAuditResult {
 	systemError?: boolean;
 	infraFeedback?: string;
 	elapsedMs?: number;
+	checkedSha?: string | null;
 	models?: {
 		label: string;
 		status: "passed" | "failed" | "error";
@@ -132,12 +135,34 @@ export async function auditGoalCompletion(
 		return { kind: "config_error", message: promptResult.message };
 	const prompt = promptResult.prompt;
 	const prior = options.active;
+	const observed = readCheckedHead(ctx.cwd);
+	const head = observed.sha;
+	const cursor = observed.entries && headCursor(observed.entries);
+	// A resumed reviewer still reads this worktree. A different HEAD therefore
+	// starts a new logical run; never carry outcomes across that boundary.
+	const sameHead = prior && (prior.checkedSha ?? null) === head &&
+		(!head || unchangedHead(observed, head, prior.checkedHeadCursor));
 	let active = startCheckRun(
-		prior,
+		sameHead ? prior : null,
 		options.round,
 		checkInputHash("acceptance", prompt),
 		flowConfig.modelRoles.reviewers,
 	);
+	// A legacy/non-Git checkpoint may resume with unknown attribution, but
+	// its outcomes cannot be carried into a different runId.
+	if (head === null && active.runId !== prior?.runId) {
+		active.models = active.models.map((model) => ({ ...model, outcome: null }));
+	}
+	active = { ...active, checkedSha: head, checkedHeadCursor: cursor ?? undefined };
+	const invalidateChangedHead = () => {
+		if (!active.checkedSha) return false;
+		const current = readCheckedHead(ctx.cwd);
+		if (unchangedHead(current, active.checkedSha, active.checkedHeadCursor))
+			return false;
+		// Latch the invalidation; later reviewers cannot re-attribute mixed results.
+		active = { ...active, checkedSha: null };
+		return true;
+	};
 	if (
 		(await options.onCheckRun?.(active, prior?.generation ?? null)) ===
 		"deferred"
@@ -208,6 +233,7 @@ export async function auditGoalCompletion(
 					return;
 				}
 				active = next;
+				invalidateChangedHead();
 				if (
 					(await options.onCheckRun?.(active, active.generation)) === "deferred"
 				) {
@@ -221,6 +247,10 @@ export async function auditGoalCompletion(
 	} finally {
 		progressScope.close();
 	}
+	if (!checkpointDeferred && invalidateChangedHead()) {
+		checkpointDeferred =
+			(await options.onCheckRun?.(active, active.generation)) === "deferred";
+	}
 	return checkpointDeferred
 		? { kind: "checkpoint_deferred" }
 		: {
@@ -230,11 +260,60 @@ export async function auditGoalCompletion(
 						aggregateAuditResults(results, goal.language),
 						results,
 					),
+					checkedSha: active.checkedSha ?? null,
 					...(active.startedAt
 						? { elapsedMs: Date.now() - active.startedAt }
 						: {}),
 				},
 			};
+}
+
+function readCheckedHead(cwd: string): { sha: string | null; entries: string[] | null } {
+	const git = (...args: string[]) => spawnSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, LC_ALL: "C" } });
+	const readSha = () => {
+		const result = git("rev-parse", "--verify", "HEAD");
+		return result.status === 0 ? result.stdout.trim() : null;
+	};
+	const sha = readSha();
+	if (!sha) return { sha, entries: null };
+	// `reflog show HEAD` can fall back to the branch log when the worktree log is empty.
+	const exists = git("reflog", "exists", "HEAD");
+	if (exists.status === 1 && !exists.stderr) {
+		// The setting controls auto-creation, not updates to existing reflogs.
+		const config = git("config", "--type=bool", "--get", "core.logAllRefUpdates");
+		if (config.status !== 1 && !(config.status === 0 && config.stdout.trim() === "true")) {
+			const raw = git("config", "--get", "core.logAllRefUpdates");
+			if (raw.status !== 0 || raw.stdout.trim().toLowerCase() !== "always") return { sha, entries: null };
+		}
+		return { sha, entries: readSha() === sha ? [] : null };
+	}
+	if (exists.status !== 0) return { sha, entries: null };
+	const newest = git("rev-parse", "--verify", "HEAD@{now}");
+	if (newest.status !== 0) {
+		return { sha, entries: newest.stderr.includes("log for HEAD is empty") && readSha() === sha ? [] : null };
+	}
+	// Date selectors are stable across appends, unlike HEAD@{n}. Git handles the ref backend.
+	const log = git("reflog", "show", "--format=%H %gd %gN %gE %gs", "--date=raw", "HEAD");
+	if (log.status !== 0 || log.stderr || (log.stdout && !log.stdout.endsWith("\n")) || readSha() !== sha)
+		return { sha, entries: null };
+	const entries = log.stdout ? log.stdout.slice(0, -1).split("\n").reverse() : [];
+	if (entries.length && !entries.at(-1)?.startsWith(`${sha} `)) return { sha, entries: null };
+	return { sha, entries };
+}
+
+function headCursor(entries: string[]) {
+	return { count: entries.length, digest: createHash("sha256").update(JSON.stringify(entries)).digest("hex") };
+}
+
+function unchangedHead(
+	current: ReturnType<typeof readCheckedHead>,
+	sha: string,
+	cursor: ActiveCheckRun["checkedHeadCursor"],
+) {
+	const { entries } = current;
+	if (current.sha !== sha || !entries || !cursor || entries.length < cursor.count) return false;
+	if (headCursor(entries.slice(0, cursor.count)).digest !== cursor.digest) return false;
+	return entries.slice(cursor.count).every((entry) => entry.startsWith(`${sha} `));
 }
 
 async function runSingleAudit(
