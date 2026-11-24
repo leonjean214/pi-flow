@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ActiveCheckRun, CheckModelOutcome } from "./goal/types.js";
 import type { ReviewCheckpointResult } from "./review/types.js";
@@ -69,6 +70,7 @@ export interface GoalAuditResult {
 	systemError?: boolean;
 	infraFeedback?: string;
 	elapsedMs?: number;
+	checkedSha?: string | null;
 	models?: {
 		label: string;
 		status: "passed" | "failed" | "error";
@@ -138,6 +140,10 @@ export async function auditGoalCompletion(
 		checkInputHash("acceptance", prompt),
 		flowConfig.modelRoles.reviewers,
 	);
+	const head = active.runId === prior?.runId
+		? prior.checkedSha ?? null
+		: readCheckedSha(ctx.cwd);
+	active = { ...active, checkedSha: head };
 	if (
 		(await options.onCheckRun?.(active, prior?.generation ?? null)) ===
 		"deferred"
@@ -230,11 +236,20 @@ export async function auditGoalCompletion(
 						aggregateAuditResults(results, goal.language),
 						results,
 					),
+					checkedSha: active.checkedSha ?? null,
 					...(active.startedAt
 						? { elapsedMs: Date.now() - active.startedAt }
 						: {}),
 				},
 			};
+}
+
+function readCheckedSha(cwd: string): string | null {
+	const result = spawnSync("git", ["rev-parse", "--verify", "HEAD"], {
+		cwd,
+		encoding: "utf8",
+	});
+	return result.status === 0 ? result.stdout.trim() : null;
 }
 
 async function runSingleAudit(

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
 	cpSync,
 	existsSync,
@@ -37,6 +38,7 @@ try {
 	await runScenario(reviewAggregateKeepsPassedDetailsScenario);
 	await runScenario(checksValidationScenario);
 	await runScenario(checkRunRecoveryRulesScenario);
+	await runScenario(acceptanceCheckedShaRecoveryScenario);
 	await runScenario(checkDisciplineHelpersScenario);
 	await runScenario(goalTokenBudgetScenario);
 	await runScenario(flowAcceptancePromptIncludesPlanScenario);
@@ -509,6 +511,45 @@ async function checkRunRecoveryRulesScenario() {
 	);
 }
 
+function commitFixture(cwd, message) {
+	const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+	git("init", "-q");
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+		"-c", "commit.gpgsign=false", "commit", "-qm", message, "--allow-empty");
+	return git("rev-parse", "HEAD");
+}
+
+async function acceptanceCheckedShaRecoveryScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	const cwd = join(out, "acceptance-sha-recovery");
+	mkdirSync(cwd, { recursive: true });
+	writeConfig({ acceptance: true, quality: false, command: captureCommand("PASS\nOK\n") });
+	const firstSha = commitFixture(cwd, "before acceptance");
+	const ctx = mockContext(createState(), cwd);
+	async function capture(round, active) {
+		let checkpoint;
+		const result = await auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, {
+			round, active,
+			onCheckRun(value) {
+				checkpoint = JSON.parse(JSON.stringify(value));
+				return "deferred";
+			},
+		});
+		assert(result.kind === "checkpoint_deferred" && checkpoint, JSON.stringify(result));
+		return checkpoint;
+	}
+	const first = await capture(1);
+	assert(first.checkedSha === firstSha, JSON.stringify(first));
+	const secondSha = commitFixture(cwd, "after acceptance started");
+	const resumed = await capture(1, first);
+	assert(resumed.runId === first.runId && resumed.checkedSha === firstSha, JSON.stringify(resumed));
+	const next = await capture(2, first);
+	assert(next.runId !== first.runId && next.checkedSha === secondSha, JSON.stringify(next));
+	const { checkedSha: _legacyMissing, ...legacy } = first;
+	const legacyResumed = await capture(1, legacy);
+	assert(legacyResumed.runId === first.runId && legacyResumed.checkedSha === null, JSON.stringify(legacyResumed));
+}
+
 async function flowAcceptancePromptIncludesPlanScenario() {
 	const command = captureCommand(
 		"PASS\n验收 OK\n证据：文件=src/app.ts；命令=npm test\n",
@@ -517,6 +558,7 @@ async function flowAcceptancePromptIncludesPlanScenario() {
 	const cwd = join(out, "flow-acceptance-plan");
 	const sessionFile = join(cwd, "goal-session.jsonl");
 	writeFlow(cwd, sessionFile);
+	const checkedSha = commitFixture(cwd, "serial acceptance");
 	const state = createState();
 	const { handlers, module } = await loadGoalExtension(state);
 	const ctx = mockContext(state, cwd, sessionFile);
@@ -540,7 +582,8 @@ async function flowAcceptancePromptIncludesPlanScenario() {
 	assert(!args.includes("计划修订检测"), "unchanged plan injected change note");
 	const flow = readFlow(cwd);
 	assert(
-		flow.goals[0].checks.acceptance.rounds[0].summary === "验收 OK" &&
+		flow.goals[0].checks.acceptance.rounds[0].checkedSha === checkedSha &&
+			flow.goals[0].checks.acceptance.rounds[0].summary === "验收 OK" &&
 			flow.goals[0].checks.acceptance.rounds[0].details.includes("验收 OK"),
 		JSON.stringify(flow.goals[0].checks),
 	);
@@ -2724,6 +2767,8 @@ async function workerAcceptanceHardCapHandoffScenario() {
 	const cwd = join(out, "worker-acceptance-hard-cap");
 	const sessionFile = join(cwd, "worker-session.jsonl");
 	writeFlow(cwd, sessionFile);
+	const firstSha = commitFixture(cwd, "worker first acceptance");
+	let laterSha;
 	const dir = join(cwd, ".flow", "F1");
 	const artifactPath = writeWorkerArtifactFixture(dir, sessionFile);
 	const state = createState();
@@ -2749,6 +2794,7 @@ async function workerAcceptanceHardCapHandoffScenario() {
 	try {
 		await startWorkerArtifactGoal(module, ctx, dir, artifactPath);
 		for (let round = 1; round <= 10; round += 1) {
+			if (round === 2) laterSha = commitFixture(cwd, "worker second acceptance");
 			await handlers.get("agent_end")(
 				{ messages: [{ role: "assistant", stopReason: "stop" }] },
 				ctx,
@@ -2773,6 +2819,9 @@ async function workerAcceptanceHardCapHandoffScenario() {
 		readFileSync(join(dir, "flow.json"), "utf8") === flowJsonBefore,
 		"worker hard cap touched parent flow.json",
 	);
+	const checkedRounds = artifact.checks.acceptance.rounds;
+	assert(checkedRounds[0]?.checkedSha === firstSha && checkedRounds[1]?.checkedSha === laterSha,
+		`worker checked SHA missing: ${JSON.stringify(checkedRounds)}`);
 	const workerCheckArgs = readFileSync(`${command}.args`, "utf8");
 	assert(
 		workerCheckArgs.includes("计划修订检测") &&

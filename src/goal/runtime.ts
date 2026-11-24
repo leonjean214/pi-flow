@@ -564,6 +564,7 @@ function reviewHistory(
 			...(models ? { models } : {}),
 			...(round.advisor ? { advisor: round.advisor } : {}),
 			...(round.elapsedMs !== undefined ? { elapsedMs: round.elapsedMs } : {}),
+			...(round.checkedSha !== undefined ? { checkedSha: round.checkedSha } : {}),
 		};
 	});
 }

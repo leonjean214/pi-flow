@@ -18,6 +18,7 @@ export interface ReviewHistoryEntry {
 	}[];
 	advisor?: CheckRoundAdvisor;
 	elapsedMs?: number;
+	checkedSha?: string | null;
 }
 
 const PRIOR_ROUNDS_BUDGET = 12_000;

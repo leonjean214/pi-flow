@@ -113,6 +113,7 @@ export function recordGoalReview(
 				),
 				...(keepDetails && details ? { details } : {}),
 				...(audit.models ? { models: audit.models } : {}),
+				checkedSha: audit.checkedSha ?? null,
 				...(audit.elapsedMs !== undefined
 					? { elapsedMs: audit.elapsedMs }
 					: {}),
