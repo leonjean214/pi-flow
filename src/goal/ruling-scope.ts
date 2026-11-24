@@ -49,7 +49,7 @@ export function rulingScope(markdown: string): RulingScope | undefined {
 					heading.time,
 					heading.index,
 				);
-			heading = /^## (?:主窗口|监工|任务窗口).*(?:裁定|结单)/.test(line)
+			heading = /^## .*(?:裁定|结单)/.test(line)
 				? { index, time: rulingTime(line, year) }
 				: undefined;
 		}
@@ -64,7 +64,8 @@ export function rulingScope(markdown: string): RulingScope | undefined {
 			heading.time,
 			heading.index,
 		);
-	if (closedMarker) return latest ?? { ruling: "<!-- flow-closed -->" };
+	// copy-lint-ignore: fixed model-only ruling protocol; not a UI label.
+	if (closedMarker) return latest ?? { ruling: "Goal 文件含 flow-closed 标记" };
 	return latest && /结单|只(?:做|作)?簿记/.test(latest.ruling)
 		? latest
 		: undefined;
@@ -89,9 +90,92 @@ export function withRulingScope(
 	return `${prefix}\n${scope.ruling}\n\n${prompt}`;
 }
 
-// Guard common direct shell calls, not arbitrary scripts or shell indirection.
-export function isGitPushCommand(command: string) {
-	return /(?:^|[;&|\n(])[ \t]*git[ \t]+(?:(?:-C|-c|--git-dir|--work-tree)[ \t]+(?:"[^"]*"|'[^']*'|[^\s;&|]+)[ \t]+|--[\w-]+(?:=[^\s;&|]+)?[ \t]+)*push(?=$|[\s;&|)>])/.test(
-		command,
+const shellCommandPrefixes = new Set([
+	"!",
+	"{",
+	"if",
+	"then",
+	"elif",
+	"else",
+	"while",
+	"until",
+	"do",
+]);
+const gitOptionsWithValue = new Set([
+	"-C",
+	"-c",
+	"--git-dir",
+	"--work-tree",
+	"--namespace",
+	"--config-env",
+	"--super-prefix",
+	"--attr-source",
+]);
+
+const gitSwitches = new Set([
+	"-p",
+	"-P",
+	"--paginate",
+	"--no-pager",
+	"--bare",
+	"--no-replace-objects",
+	"--no-lazy-fetch",
+	"--no-optional-locks",
+	"--no-advice",
+	"--literal-pathspecs",
+	"--glob-pathspecs",
+	"--noglob-pathspecs",
+	"--icase-pathspecs",
+]);
+
+function shellWord(token: string) {
+	return token.replace(
+		/'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)/g,
+		(_, single, double, escaped) =>
+			single ?? double?.replace(/\\(["\\$`])/g, "$1") ?? escaped,
 	);
+}
+
+// Recognize direct commands separated by shell operators, without running or expanding shell code.
+export function isGitPushCommand(command: string) {
+	const tokens =
+		command.match(
+			/#[^\n]*|[;&|()\n<>]|(?:'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\\[^\n]|[^\s;&|()<>"'\\])+/g,
+		) ?? [];
+	let atCommandStart = true;
+	let gitArguments = false;
+	let gitOptionValue = false;
+	for (const token of tokens) {
+		if (/^[;&|()\n]$/.test(token)) {
+			atCommandStart = true;
+			gitArguments = false;
+			gitOptionValue = false;
+			continue;
+		}
+		if (token.startsWith("#")) continue;
+		if (atCommandStart) {
+			if (
+				shellCommandPrefixes.has(token) ||
+				/^[a-zA-Z_][a-zA-Z_0-9]*=/.test(token)
+			)
+				continue;
+			gitArguments = shellWord(token) === "git";
+			atCommandStart = false;
+			continue;
+		}
+		if (!gitArguments) continue;
+		if (gitOptionValue) {
+			gitOptionValue = false;
+			continue;
+		}
+		const word = shellWord(token);
+		if (word === "push") return true;
+		if (gitOptionsWithValue.has(word)) gitOptionValue = true;
+		else if (
+			!gitSwitches.has(word) &&
+			!(word.includes("=") && gitOptionsWithValue.has(word.split("=", 1)[0]))
+		)
+			gitArguments = false;
+	}
+	return false;
 }

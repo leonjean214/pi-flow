@@ -3670,8 +3670,12 @@ async function flowClosedRepairResumeScenario() {
 	);
 	const path = join(cwd, ".flow", "F1", "G1-login.md");
 	const ruling =
-		"## 监工补充裁定（2026-11-24 11:2x，据 a194）\n偏差结单：本轮只做簿记。";
-	writeFileSync(path, `${readFileSync(path, "utf8")}\n\n${ruling}\n`);
+		"## 补充裁定（2026-11-24 11:2x，由监工签发）\n偏差结单：本轮只做簿记。";
+	const original = readFileSync(path, "utf8");
+	writeFileSync(
+		path,
+		`${original}\n\n## 主窗口裁定（2026-11-24 10:20）\n继续修。\n\n${ruling}\n`,
+	);
 	assert(
 		(await module.resumePausedGoalFromFlow(ctx)) === "resumed",
 		"expected resume",
@@ -3693,6 +3697,12 @@ async function flowClosedRepairResumeScenario() {
 		"git push",
 		"git -C repo push origin b",
 		"cd x && git push -u origin b",
+		"git -P push",
+		"GIT_TRACE='with spaces' git push",
+		"if git push; then :; fi",
+		"{ git push; }",
+		"git --git-dir repo --no-pager push",
+		"if true; then git push; fi",
 	])
 		assert(await blocked(push), `closed repair resume allowed ${push}`);
 	for (const other of [
@@ -3700,11 +3710,15 @@ async function flowClosedRepairResumeScenario() {
 		"echo push",
 		"git log --grep=push",
 		"echo git push",
+		"printf '%s\\n' '步骤示例; git push'",
+		"printf '%s\\n' \"步骤示例; git push\"",
+		"echo if git push",
+		"# git push; git push",
 	])
 		assert(!(await blocked(other)), `closed repair resume blocked ${other}`);
 	writeFileSync(
 		path,
-		`${readFileSync(path, "utf8")}\n## 主窗口终审裁定（2026-11-24 11:5x）\n本轮必须修。\n`,
+		`${readFileSync(path, "utf8")}\n## 终审裁定（2026-11-24 11:5x，由主窗口签发）\n本轮必须修。\n`,
 	);
 	assert(
 		!(await blocked("git push")),
@@ -3722,6 +3736,21 @@ async function flowClosedRepairResumeScenario() {
 		state.sentMessages.at(-1) === "继续",
 		"newer ruling did not restore the short resume prompt",
 	);
+	assert(!(await blocked("git push")), "repair resume still blocked push");
+	await handlers.get("agent_end")(
+		{ messages: [{ role: "assistant", stopReason: "aborted" }] },
+		ctx,
+	);
+	writeFileSync(path, `${original}\n<!-- flow-closed -->\n`);
+	assert(
+		(await module.resumePausedGoalFromFlow(ctx)) === "resumed",
+		"expected marker-only resume",
+	);
+	assert(
+		state.sentMessages.at(-1).includes("Goal 文件含 flow-closed 标记"),
+		"standalone closure marker lost its explanation",
+	);
+	assert(await blocked("git push"), "marker-only resume allowed push");
 }
 
 async function flowClosedContinuationScenario() {
@@ -3759,7 +3788,7 @@ async function flowClosedContinuationScenario() {
 	assert(
 		typeof message === "string" &&
 			message.includes(ruling) &&
-			message.includes("本轮只更新记录"),
+			message.includes("本轮只更新记录，不得改代码、不得提交推送"),
 		"automatic continuation lost the newer dated ruling",
 	);
 }
