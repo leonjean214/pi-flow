@@ -128,54 +128,170 @@ const gitSwitches = new Set([
 	"--icase-pathspecs",
 ]);
 
-function shellWord(token: string) {
-	return token.replace(
-		/'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)/g,
-		(_, single, double, escaped) =>
-			single ?? double?.replace(/\\(["\\$`])/g, "$1") ?? escaped,
-	);
-}
+const shellWrappers = new Set([
+	"command",
+	"env",
+	"exec",
+	"nohup",
+	"time",
+	"sudo",
+]);
+const wrapperOptionsWithValue: Readonly<Record<string, readonly string[]>> = {
+	command: [],
+	env: ["-u", "--unset", "-C", "--chdir"],
+	exec: ["-a"],
+	nohup: [],
+	time: [],
+	sudo: ["-u", "--user", "-g", "--group"],
+};
+const wrapperSwitches: Readonly<Record<string, readonly string[]>> = {
+	command: ["-p"],
+	env: ["-i", "--ignore-environment"],
+	exec: ["-c", "-l"],
+	nohup: [],
+	time: ["-p"],
+	sudo: ["-n", "--non-interactive", "-H", "-E", "--preserve-env"],
+};
 
-// Recognize direct commands separated by shell operators, without running or expanding shell code.
+// Scan literal simple commands; never execute shell code or expand dynamic names.
 export function isGitPushCommand(command: string) {
-	const tokens =
-		command.match(
-			/#[^\n]*|[;&|()\n<>]|(?:'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\\[^\n]|[^\s;&|()<>"'\\])+/g,
-		) ?? [];
-	let atCommandStart = true;
-	let gitArguments = false;
-	let gitOptionValue = false;
-	for (const token of tokens) {
-		if (/^[;&|()\n]$/.test(token)) {
-			atCommandStart = true;
-			gitArguments = false;
-			gitOptionValue = false;
-			continue;
+	let pos = 0;
+	let found = false;
+	const redirect = /(?:[0-9]+)?(?:<<<|<<-|<<|>>|>&|<&|<>|>\||>|<)|&>>?/y;
+	const assignment = /^[A-Za-z_][A-Za-z_0-9]*=/;
+	const continued = () => command.startsWith("\\\n", pos);
+	const skipBlanks = () => {
+		while (pos < command.length) {
+			if (continued()) pos += 2;
+			else if (/[ \t]/.test(command[pos])) pos++;
+			else break;
 		}
-		if (token.startsWith("#")) continue;
-		if (atCommandStart) {
-			if (
-				shellCommandPrefixes.has(token) ||
-				/^[a-zA-Z_][a-zA-Z_0-9]*=/.test(token)
-			)
-				continue;
-			gitArguments = shellWord(token) === "git";
-			atCommandStart = false;
-			continue;
+	};
+
+	function readWord(end: string, literal = false) {
+		let word = "";
+		let quoted = false;
+		let quote = "";
+		while (pos < command.length) {
+			const ch = command[pos];
+			if (!quote && (ch === end || /[\s;&|()<>]/.test(ch))) break;
+			if (ch === "\\" && quote !== "'") {
+				const next = command[pos + 1];
+				if (!next || (quote && !/[\\"$`\n]/.test(next))) {
+					word += ch;
+					pos++;
+					continue;
+				}
+				if (next !== "\n") {
+					quoted = true;
+					word += next;
+				}
+				pos += 2;
+			} else if (ch === quote || (!quote && (ch === "'" || ch === '"'))) {
+				quoted = true;
+				quote = quote ? "" : ch;
+				pos++;
+			} else if (
+				!literal &&
+				quote !== "'" &&
+				(ch === "`" || command.startsWith("$(", pos))
+			) {
+				pos += ch === "`" ? 1 : 2;
+				scan(ch === "`" ? "`" : ")");
+				word += "\0";
+			} else {
+				word += ch;
+				pos++;
+			}
 		}
-		if (!gitArguments) continue;
-		if (gitOptionValue) {
-			gitOptionValue = false;
-			continue;
-		}
-		const word = shellWord(token);
-		if (word === "push") return true;
-		if (gitOptionsWithValue.has(word)) gitOptionValue = true;
-		else if (
-			!gitSwitches.has(word) &&
-			!(word.includes("=") && gitOptionsWithValue.has(word.split("=", 1)[0]))
-		)
-			gitArguments = false;
+		return { word, quoted };
 	}
-	return false;
+
+	function scan(end = ""): void {
+		const heredocs: { delimiter: string; stripTabs: boolean }[] = [];
+		let mode: "start" | "git" | "other" = "start";
+		let skipValue = false;
+		let wrapper = "";
+		while (!found && pos < command.length) {
+			skipBlanks();
+			if (pos === command.length) break;
+			const ch = command[pos];
+			if (ch === end) {
+				pos++;
+				return;
+			}
+			if (ch === "#") {
+				while (pos < command.length && command[pos] !== "\n") pos++;
+				continue;
+			}
+			redirect.lastIndex = pos;
+			const op = redirect.exec(command)?.[0];
+			if (op) {
+				pos += op.length;
+				skipBlanks();
+				const heredoc = /^\d*<<-?$/.test(op);
+				const { word } = readWord(end, heredoc);
+				if (heredoc)
+					heredocs.push({ delimiter: word, stripTabs: op.endsWith("-") });
+				continue;
+			}
+			if (/[;&|()\n]/.test(ch)) {
+				pos++;
+				if (ch === "(") scan(")");
+				if (ch === "\n") {
+					for (const { delimiter, stripTabs } of heredocs.splice(0)) {
+						while (pos < command.length) {
+							const newline = command.indexOf("\n", pos);
+							const line = command.slice(
+								pos,
+								newline < 0 ? command.length : newline,
+							);
+							pos = newline < 0 ? command.length : newline + 1;
+							if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter)
+								break;
+						}
+					}
+				}
+				mode = "start";
+				skipValue = false;
+				wrapper = "";
+				continue;
+			}
+			const start = pos;
+			const { word, quoted } = readWord(end);
+			if (pos === start) {
+				pos++;
+				continue;
+			}
+			if (skipValue) {
+				skipValue = false;
+				continue;
+			}
+			const [option] = word.split("=", 1);
+			if (mode === "start") {
+				if (
+					(!quoted && shellCommandPrefixes.has(word)) ||
+					assignment.test(command.slice(start, pos))
+				)
+					continue;
+				if (wrapper && word.startsWith("-")) {
+					if (wrapperOptionsWithValue[wrapper].includes(option))
+						skipValue = option === word;
+					else if (word !== "--" && !wrapperSwitches[wrapper].includes(word))
+						mode = "other";
+					continue;
+				}
+				const name = word.split("/").at(-1) ?? "";
+				if (shellWrappers.has(name)) wrapper = name;
+				else mode = name === "git" ? "git" : "other";
+			} else if (mode === "git") {
+				if (word === "push") found = true;
+				else if (gitOptionsWithValue.has(option)) skipValue = option === word;
+				else if (!gitSwitches.has(word)) mode = "other";
+			}
+		}
+	}
+
+	scan();
+	return found;
 }
