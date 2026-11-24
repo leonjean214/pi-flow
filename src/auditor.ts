@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ActiveCheckRun, CheckModelOutcome } from "./goal/types.js";
 import type { ReviewCheckpointResult } from "./review/types.js";
@@ -137,11 +138,11 @@ export async function auditGoalCompletion(
 	const prior = options.active;
 	const observed = readCheckedHead(ctx.cwd);
 	const head = observed?.sha ?? null;
-	const epoch = observed?.epoch;
+	const cursor = observed && headCursor(observed.log);
 	// A resumed reviewer still reads this worktree. A different HEAD therefore
 	// starts a new logical run; never carry outcomes across that boundary.
 	const sameHead = prior && (prior.checkedSha ?? null) === head &&
-		prior.checkedHeadEpoch === epoch;
+		(!head || unchangedHead(observed, head, prior.checkedHeadCursor));
 	let active = startCheckRun(
 		sameHead ? prior : null,
 		options.round,
@@ -153,11 +154,11 @@ export async function auditGoalCompletion(
 	if (head === null && active.runId !== prior?.runId) {
 		active.models = active.models.map((model) => ({ ...model, outcome: null }));
 	}
-	active = { ...active, checkedSha: head, checkedHeadEpoch: epoch };
+	active = { ...active, checkedSha: head, checkedHeadCursor: cursor ?? undefined };
 	const invalidateChangedHead = () => {
 		if (!active.checkedSha) return false;
 		const current = readCheckedHead(ctx.cwd);
-		if (current?.sha === active.checkedSha && current?.epoch === epoch)
+		if (unchangedHead(current, active.checkedSha, active.checkedHeadCursor))
 			return false;
 		// Latch the invalidation; later reviewers cannot re-attribute mixed results.
 		active = { ...active, checkedSha: null };
@@ -275,9 +276,34 @@ function readCheckedHead(cwd: string) {
 	});
 	if (result.status !== 0) return null;
 	const [logPath, sha] = result.stdout.trimEnd().split("\n");
-	const log = statSync(logPath, { bigint: true, throwIfNoEntry: false });
-	// Without a worktree HEAD log, equal endpoint SHAs cannot rule out A→B→A.
-	return log ? { sha, epoch: `${log.ino}:${log.size}:${log.mtimeNs}` } : null;
+	let log: Buffer;
+	try {
+		log = readFileSync(logPath);
+	} catch (error) {
+		if (["ENOENT", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+		throw error;
+	}
+	// A partial append or a race between reading HEAD and its log is not proof.
+	if (log.at(-1) !== 10) return null;
+	const last = log.subarray(log.lastIndexOf(10, log.length - 2) + 1).toString("utf8");
+	return last.split(" ", 3)[1] === sha ? { sha, log } : null;
+}
+
+function headCursor(log: Buffer) {
+	return { bytes: log.length, digest: createHash("sha256").update(log).digest("hex") };
+}
+
+function unchangedHead(
+	current: ReturnType<typeof readCheckedHead>,
+	sha: string,
+	cursor: ActiveCheckRun["checkedHeadCursor"],
+) {
+	if (!current || current.sha !== sha || !cursor || current.log.length < cursor.bytes) return false;
+	if (headCursor(current.log.subarray(0, cursor.bytes)).digest !== cursor.digest) return false;
+	const appended = current.log.subarray(cursor.bytes);
+	if (!appended.length) return true;
+	return appended.toString("utf8").slice(0, -1).split("\n")
+		.every((entry) => entry.startsWith(`${sha} ${sha} `));
 }
 
 async function runSingleAudit(

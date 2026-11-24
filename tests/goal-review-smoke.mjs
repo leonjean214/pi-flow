@@ -43,6 +43,7 @@ try {
 	await runScenario(acceptanceCheckedShaResumeAfterCheckoutScenario);
 	await runScenario(acceptanceCheckedShaSettlementScenario);
 	await runScenario(acceptanceCheckedShaConcurrentCheckoutScenario);
+	await runScenario(acceptanceCheckedShaNoopReflogScenario);
 	await runScenario(checkDisciplineHelpersScenario);
 	await runScenario(goalTokenBudgetScenario);
 	await runScenario(flowAcceptancePromptIncludesPlanScenario);
@@ -621,6 +622,40 @@ async function acceptanceCheckedShaResumeAfterCheckoutScenario() {
 		return "deferred";
 	} });
 	assert(back.kind === "checkpoint_deferred", JSON.stringify(back));
+}
+
+async function acceptanceCheckedShaNoopReflogScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	const cwd = join(out, "acceptance-noop-reflog");
+	mkdirSync(cwd, { recursive: true });
+	const sha = commitFixture(cwd, "A");
+	const reset = () => execFileSync("git", ["reset", "HEAD"], { cwd, stdio: "ignore" });
+	const command = countedScript(["FAIL\n标准 1\n"], "*) cat '{{last}}' ;;");
+	writeConfig({ acceptance: true, command });
+	const ctx = mockContext(createState(), cwd);
+	const audit = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round: 1, ...options });
+	const log = join(cwd, ".git/logs/HEAD");
+	const before = readFileSync(log, "utf8");
+	let active;
+	const first = await audit({ onCheckRun(value) {
+		if (!active) reset();
+		active = value;
+		return "saved";
+	} });
+	assert(readFileSync(log, "utf8").slice(before.length).startsWith(`${sha} ${sha} `), "fixture did not append A→A");
+	assert(first.kind === "result" && first.audit.checkedSha === sha && active.checkedSha === sha, JSON.stringify(first));
+	reset();
+	const resumed = await audit({ active, onCheckRun(value) {
+		assert(value.runId === active.runId && value.checkedSha === sha && value.models[0].outcome?.result === "failed", JSON.stringify(value));
+		return "saved";
+	} });
+	assert(resumed.kind === "result" && resumed.audit.checkedSha === sha && scriptRunCount(command) === 1, JSON.stringify(resumed));
+	// The endpoint is still A, but a truncated prefix cannot prove continuity.
+	writeFileSync(log, readFileSync(log, "utf8").split("\n").at(-2) + "\n");
+	let rebuilt;
+	await audit({ active, onCheckRun(value) { rebuilt = value; return "deferred"; } });
+	assert(rebuilt?.checkedSha === sha && rebuilt.runId !== active.runId &&
+		rebuilt.models.every((model) => !model.outcome), JSON.stringify(rebuilt));
 }
 
 async function acceptanceCheckedShaConcurrentCheckoutScenario() {
