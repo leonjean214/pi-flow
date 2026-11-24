@@ -32,6 +32,7 @@ PASS 输出的机器强制边界（`src/shared/review-verdict.ts#passOutputIssue
 | 步骤启动 prompt（snapshot + 前序 Handoff + 边界 + FA 职责；prewalk fork 启动时前置解禁句：生成期只读限制已解除、探索结论可复用） | `src/flow/prompt.ts#planGoalPrompt` | 步骤启动 | 隐藏 `sendOrchestrationPrompt` |
 | 步骤 system prompt（目标 + Flow 步骤规则 + todoRule + 反循环 + 编排来源声明） | `src/goal/prompts.ts#buildGoalSystemPrompt` | 每回合 `before_agent_start` | systemPrompt 拼接 |
 | 恢复 prompt（开头注入编排上下文声明 `orchestrationContextLine`：用户已离场、仍是自动化流程、BLOCKED 协议；有手动待投顾问建议时前置“待核实假设”段） | `src/goal/prompts.ts#buildResumePrompt` | 「/flow go」恢复已执行步骤 | 普通恢复隐藏；含手动建议时用 `pi-flow-advisor-direction` 隐藏投递，Context Evidence 提取时排除 |
+| 结单授权范围（只更新记录、附最新裁定原文） | `src/goal/ruling-scope.ts#withRulingScope` | 执行提示投递、顾问修复投递及 worker 执行启动；检查 hold 不变 | 执行提示前缀 |
 | 自动延续 prompt（不重复目标，可携带拖延勾选提醒） | `src/goal/prompts.ts#buildContinuePrompt` | `agent_end` 未完成且无检查 | 隐藏 followUp |
 | 验收前收口闸门（列出未收口 [ ]/[~] 项原文，穷举补勾/继续/标 [!] 三种出路，`src/goal/check-discipline.ts#todoClosureReminder`） | `src/goal/runtime.ts#gateAcceptanceOnOpenTodos` | 自然结束将进验收但计划仍有未收口 checkbox（每验收轮最多一次，[!] 放行；投递受阻/失败时推迟验收不放行：串行写 attention 并请求接管，并行 worker 经自身 artifact paused+handoff 收口退出） | 并入隐藏延续 prompt，顶替拖延勾选提醒 |
 | 拖延勾选提醒 / 修订许可条款 / 计划修订注入 / 硬上限文案 | `src/goal/check-discipline.ts` | staleness 命中 / 连续 2 轮未过 / 检查启动时计划有修订 / 连续 10 轮未过 | 并入所属 prompt |

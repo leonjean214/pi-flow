@@ -79,6 +79,8 @@ try {
 	await runScenario(flowAcceptanceConfigErrorPauseRespectsFlowLockScenario);
 	await runScenario(flowQualityMidLoopConfigErrorPausesScenario);
 	await runScenario(flowQualityRepairCursorSurvivesAbortScenario);
+	await runScenario(flowClosedRepairResumeScenario);
+	await runScenario(flowClosedContinuationScenario);
 	await runScenario(flowRepairCursorRetryAutoResumeKeepsFullPromptScenario);
 	await runScenario(flowCheckHardCapPausesScenario);
 	await runScenario(flowAcceptanceHardCapDeliveryFailureScenario);
@@ -3726,6 +3728,260 @@ async function flowQualityRepairCursorSurvivesAbortScenario() {
 	assert(
 		qualityStartsAfterResume === qualityStartsBeforeResume,
 		"paused quality repair resume restarted the quality check instead of continuing the repair",
+	);
+}
+
+async function flowClosedRepairResumeScenario() {
+	const command = captureCommand("FAIL\n质量不达标\n");
+	writeConfig({ acceptance: false, quality: true, command });
+	const cwd = join(out, "flow-closed-repair-resume");
+	const sessionFile = join(cwd, "goal-session.jsonl");
+	writeFlow(cwd, sessionFile);
+	const state = createState();
+	const { handlers, module } = await loadGoalExtension(state);
+	const ctx = mockContext(state, cwd, sessionFile);
+	await module.startGoalFromFlow("Flow objective", ctx);
+	for (const stopReason of ["stop", "aborted"]) {
+		await handlers.get("agent_end")(
+			{ messages: [{ role: "assistant", stopReason }] },
+			ctx,
+		);
+	}
+	assert(
+		readFlow(cwd).goals[0].completionCursor === "quality_repair",
+		"expected paused repair",
+	);
+	const path = join(cwd, ".flow", "F1", "G1-login.md");
+	const ruling =
+		"## 补充裁定（2026-11-24 11:2x，由监工签发）\n偏差结单：本轮只做簿记。";
+	const original = readFileSync(path, "utf8");
+	writeFileSync(
+		path,
+		`${original}\n\n## 主窗口裁定（2026-11-24 10:20）\n继续修。\n\n${ruling}\n`,
+	);
+	assert(
+		(await module.resumePausedGoalFromFlow(ctx)) === "resumed",
+		"expected resume",
+	);
+	const prompt = state.sentMessages.at(-1);
+	assert(
+		prompt.includes("本轮只更新记录，不得改代码、不得提交推送") &&
+			prompt.includes(ruling),
+		`closed repair resume lost ruling scope: ${prompt}`,
+	);
+	const blocked = async (command) =>
+		(
+			await handlers.get("tool_call")(
+				{ toolName: "bash", input: { command } },
+				ctx,
+			)
+		)?.block === true;
+	const blockCases = [
+		"git push",
+		"git -C repo push origin b",
+		"cd x && git push -u origin b",
+		"git -P push",
+		"GIT_TRACE='with spaces' git push",
+		"if git push; then :; fi",
+		"{ git push; }",
+		"git --git-dir repo --no-pager push",
+		"if true; then git push; fi",
+		"git \\" + "\n push",
+		"gi\\" + "\nt push",
+		"git >/tmp/log push",
+		"git -C repo 2>&1 push",
+		"git 2>/dev/null push",
+		"git >>log push",
+		"git <<<x push",
+		">log /usr/bin/git push",
+		"cat <<'EOF'\ngit status\nEOF\ngit push",
+		"echo `git push`",
+		'echo "$(git push)"',
+		"command env GIT_TRACE=1 /usr/bin/git push",
+		"git {fd}>/dev/null push",
+		"git {f\\\nd}>/dev/null push",
+		"git {fd}\\\n>/dev/null push",
+		"git 2\\\n>/dev/null push",
+		"GIT_TR\\\nACE=1 git push",
+		"git --exec-path=/usr/lib/git-core push",
+		"git 3>/tmp/log push",
+		"git >&3 push",
+		"git {fd}>&- push",
+		"git --git-dir=repo --work-tree=wt push",
+		"a=(x); git push",
+		'a=("$(git push)")',
+		"(git push) || :",
+		"git {fd}>\\\n&2 push",
+		"git {fd}>\\\n|/dev/null push",
+		"git {fd}<\\\n&0 push",
+		": <<EOF\nEO\\\nF\ngit push\nEOF",
+		"echo $'it\\'s' ; git push",
+		"a=(<\\\n(git push))",
+		`echo "\${missing:-$(git push)}"`,
+		"a=($((1 + ($(git push)))))",
+		"a=($[1 + $(git push)])",
+	];
+	const allowCases = [
+		"git status",
+		"echo push",
+		"git log --grep=push",
+		"echo git push",
+		"printf '%s\\n' '步骤示例; git push'",
+		"printf '%s\\n' \"步骤示例; git push\"",
+		"echo if git push",
+		"# git push; git push",
+		"git status >push",
+		"cat >> h.md <<'EOF'\ngit push\nEOF",
+		"cat <<EOF\ngit push\nEOF\ngit status",
+		"cat <<-EOF\n\tgit push\n\tEOF",
+		"cat <<'A' <<B\ngit push\nA\ngit push\nB",
+		"printf '%s' '`git push`'",
+		"command -v git push",
+		// Indirect execution is outside the guard; do not interpret strings as shell.
+		'bash -c "git push"',
+		"eval git push",
+		`example=(git push); printf '%s\\n' "\${example[*]}"`,
+		"declare -a cmd=(git push)",
+		"cmd+=(git push)",
+		"example=\\\n(git push)",
+		"example+=\\\n(git push)",
+		"declare -a exa\\\nmple=\\\n(git push)",
+		"example=(<(printf x) git push)",
+		"example=(>(cat) git push)",
+		"git status {f\\\nd}>push",
+		"git status {fd}\\\n>push",
+		"git --unknown-option=repo push",
+		"f() { local -a cmd=(git push origin b); }",
+		"(echo git push) || :",
+		"git --exec-path=/usr/lib/git-core status",
+		"git --exec-path push",
+		"git status {fd}>push",
+		": {fd}<\\\n<EOF\ngit push\nEOF",
+		"example=(<\\\n(printf x) git push)",
+		"example=(>\\\n(:) git push)",
+		"example=($" + "{missing:-) ; git push })",
+		"echo $" + "{missing:-;git push }",
+		"a=($((1 + (2))) git push)",
+		"a=($[1 + (2)] git push)",
+		": <<EOF\nfoo \\\nEOF\ngit push\nEOF",
+		": <<'EOF'\nEO\\\nF\ngit push\nEOF",
+	];
+	for (const [expected, cases] of [
+		[true, blockCases],
+		[false, allowCases],
+	]) {
+		for (const command of cases) {
+			const message = `closed repair resume ${expected ? "allowed" : "blocked"}`;
+			assert((await blocked(command)) === expected, `${message} ${command}`);
+			// Quoted literals, comments and heredoc bodies can change meaning.
+			if (/['\\#\n]|<</.test(command)) continue;
+			for (let i = 1; i < command.length; i++) {
+				const split = `${command.slice(0, i)}\\\n${command.slice(i)}`;
+				assert((await blocked(split)) === expected, `${message} ${split}`);
+			}
+		}
+	}
+	// Bash executes the trailing command even when an assignment is rejected.
+	const subscriptCommandCases = [
+		"a[0]=x git push",
+		"a[i+1]=x git push",
+		"a[0]+=x git push",
+		"declare -A a; a[k ]=x git push",
+		'declare -A a; a["$(git push)"]=x',
+		'declare -A a=(["$(git push)"]=x)',
+		"declare -A a=([key]=value); git push",
+	];
+	const subscriptDataCases = [
+		"declare -A a=([); git push; x]=value)",
+		"declare -A a=([) ; git push ; x]=value)",
+		"declare -A a=([x)]=x [x; git push; y]=z)",
+		"declare -A a; a[x; git push; y]=1",
+	];
+	for (const [expected, cases] of [
+		[true, subscriptCommandCases],
+		[false, subscriptDataCases],
+	]) {
+		for (const command of cases) {
+			assert(
+				(await blocked(command)) === expected,
+				`closed subscript ${expected ? "allowed" : "blocked"} ${command}`,
+			);
+		}
+	}
+	writeFileSync(
+		path,
+		`${readFileSync(path, "utf8")}\n## 终审裁定（2026-11-24 11:5x，由主窗口签发）\n本轮必须修。\n`,
+	);
+	assert(
+		!(await blocked("git push")),
+		"newer ruling did not restore normal push behavior",
+	);
+	await handlers.get("agent_end")(
+		{ messages: [{ role: "assistant", stopReason: "aborted" }] },
+		ctx,
+	);
+	assert(
+		(await module.resumePausedGoalFromFlow(ctx)) === "resumed",
+		"expected resume after repair authorization",
+	);
+	assert(
+		state.sentMessages.at(-1) === "继续",
+		"newer ruling did not restore the short resume prompt",
+	);
+	assert(!(await blocked("git push")), "repair resume still blocked push");
+	await handlers.get("agent_end")(
+		{ messages: [{ role: "assistant", stopReason: "aborted" }] },
+		ctx,
+	);
+	writeFileSync(path, `${original}\n<!-- flow-closed -->\n`);
+	assert(
+		(await module.resumePausedGoalFromFlow(ctx)) === "resumed",
+		"expected marker-only resume",
+	);
+	assert(
+		state.sentMessages.at(-1).includes("Goal 文件含 flow-closed 标记"),
+		"standalone closure marker lost its explanation",
+	);
+	assert(await blocked("git push"), "marker-only resume allowed push");
+}
+
+async function flowClosedContinuationScenario() {
+	writeConfig({ acceptance: false, quality: false });
+	const cwd = join(out, "flow-closed-continuation");
+	const sessionFile = join(cwd, "goal-session.jsonl");
+	writeFlow(cwd, sessionFile);
+	const state = createState();
+	const { handlers, module } = await loadGoalExtension(state);
+	const ctx = mockContext(state, cwd, sessionFile);
+	await module.startGoalFromFlow("Flow objective", ctx);
+	const path = join(cwd, ".flow", "F1", "G1-login.md");
+	const original = readFileSync(path, "utf8");
+	const push = () =>
+		handlers.get("tool_call")(
+			{ toolName: "bash", input: { command: "git push" } },
+			ctx,
+		);
+	assert(!(await push())?.block, "unruled goal blocked push");
+	writeFileSync(path, `${original}\n文档示例：\`<!-- flow-closed -->\`\n`);
+	assert(!(await push())?.block, "quoted marker was mistaken for a ruling");
+	writeFileSync(path, `${original}\n<!-- flow-closed -->\n`);
+	assert((await push())?.block, "standalone closure marker did not block push");
+	const ruling =
+		"- 监工裁定（2026-11-24T11:21:21-05:00）：偏差结单，本轮只簿记不重跑";
+	writeFileSync(
+		path,
+		`${original.replace("## Success Criteria\n", `## Success Criteria\n${ruling}\n`)}\n## 监工补充裁定（2026-11-24 10:2x）\n继续修。\n`,
+	);
+	assert(
+		(await module.continueActiveGoalIfIdle(ctx)) === "continued",
+		"expected automatic continuation",
+	);
+	const message = state.sentMessages.at(-1);
+	assert(
+		typeof message === "string" &&
+			message.includes(ruling) &&
+			message.includes("本轮只更新记录，不得改代码、不得提交推送"),
+		"automatic continuation lost the newer dated ruling",
 	);
 }
 

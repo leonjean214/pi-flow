@@ -25,7 +25,7 @@ npm run release:current  # 仅发布当前版本，用于 tag 已有但 npm 未�
 | `src/index.ts` | 轻量扩展入口：语言与 bootstrap；禁止静态引入领域运行时 |
 | `src/bootstrap.ts` | `/flow`、`/review`、`/advisor` 命令外壳与按需激活；任一独立 review checkpoint（含 `phase:null` 终态）都会激活 Review，以恢复报告 status；flow runtime 是进程级单例，首次懒加载，加载后每个 session_start 把运行时幂等补注册到新 pi（session 重建后禁止持有 stale pi） |
 | `src/advisor.ts` | `/advisor` 用户命令：交互/空闲守卫、结果文案与顾问建议卡；领域逻辑复用 goal runtime |
-| `src/goal.ts` + `src/goal/` | Flow step 内部运行、验收、质检与状态同步引擎；不注册用户命令；`check-discipline.ts` 集中检查停滞自愈阈值、尾部失败计数与纯函数；`advisor.ts` 负责安全诊断顾问子进程（与 Reviewer 共用 checks，允许 bash 验证，禁 write/edit），runtime 负责自动/手动咨询、持久化 outbox 与执行模型投递（咨询期间挂「顾问介入中」活动框，Esc 只跳过咨询） |
+| `src/goal.ts` + `src/goal/` | Flow step 内部运行、验收、质检与状态同步引擎；不注册用户命令；`check-discipline.ts` 集中检查停滞自愈阈值、尾部失败计数与纯函数；`ruling-scope.ts` 从当前 Goal Markdown 派生结单续跑的簿记提示与直接推送 guard；`advisor.ts` 负责安全诊断顾问子进程（与 Reviewer 共用 checks，允许 bash 验证，禁 write/edit），runtime 负责自动/手动咨询、持久化 outbox 与执行模型投递（咨询期间挂「顾问介入中」活动框，Esc 只跳过咨询） |
 | `src/flow.ts` + `src/flow/` | `/flow` 命令，单步/多步生成、执行、恢复、状态与报告 |
 | `src/flow/target.ts` | Flow 命令目标解析：显式 id、当前 session、唯一 active 与多义提示 |
 | `src/flow/prewalk.ts` | 计划轨迹继承（prewalk）：生成会话记忆、首批 fork 资格判定、并行 worker 会话分支 |

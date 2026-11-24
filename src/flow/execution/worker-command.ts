@@ -6,6 +6,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { rulingScope, withRulingScope } from "../../goal/ruling-scope.js";
 import { objectiveFromPlan } from "../../goal/validator.js";
 import {
 	continueActiveGoalFromCheckpoint,
@@ -240,8 +241,14 @@ export function workerInitialPrompt(
 		readWorkerArtifact(flowDir, goalIndex),
 		flow.parallelRun?.id ?? "",
 	);
-	if (cursor === null)
-		return workerGoalInput(flowDir, flow, goalIndex, options).prompt;
+	if (cursor === null) {
+		const input = workerGoalInput(flowDir, flow, goalIndex, options);
+		return withRulingScope(
+			input.prompt,
+			rulingScope(input.markdown),
+			flow.language,
+		);
+	}
 	return flow.language === "en"
 		? "The orchestration system is resuming this step's checks from a durable checkpoint. Do not perform any actions or modify any files. Reply exactly: waiting for settlement."
 		: "编排系统正在从断点恢复本步骤的检查收口。不要执行任何操作、不要修改任何文件，直接回复：等待收口。";

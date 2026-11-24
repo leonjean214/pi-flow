@@ -1,0 +1,384 @@
+--- a/dist/lexer.js
++++ b/dist/lexer.js
+@@ -545,7 +545,8 @@
+         return new ScriptExpansionImpl("CommandExpansion", pos, this.pos, text, window);
+     }
+     processSubstitution(pos, text, operator, inner) {
+-        const window = this.scriptWindow(this.src, pos + 2, pos + 2 + inner.length, !this._unbalanced);
++        const start = skipLineContinuations(this.src, pos + 1, this.srcEnd) + 1;
++        const window = this.scriptWindow(this.src, start, start + inner.length, !this._unbalanced);
+         return new ProcessSubstitutionImpl(pos, this.pos, text, operator, window);
+     }
+     // Past the nesting budget the part gets no window, so lazy materialization bottoms out.
+@@ -776,30 +777,30 @@
+                 wordStart = false;
+                 continue;
+             }
+-            if ((ch === CH_DOLLAR && pos + 1 < this.srcEnd && this.src.charCodeAt(pos + 1) === CH_LPAREN) ||
+-                ((ch === CH_LT || ch === CH_GT) && pos + 1 < this.srcEnd && this.src.charCodeAt(pos + 1) === CH_LPAREN)) {
+-                this.pos = pos + 2;
++            const next = skipLineContinuations(this.src, pos + 1, this.srcEnd);
++            const after = this.src.charCodeAt(next);
++            if ((ch === CH_DOLLAR || ch === CH_LT || ch === CH_GT) && after === CH_LPAREN) {
++                this.pos = next + 1;
+                 this.extractBalanced();
+                 pos = this.pos;
+                 wordStart = false;
+                 continue;
+             }
+-            if (ch === CH_DOLLAR && pos + 1 < this.srcEnd) {
+-                const after = this.src.charCodeAt(pos + 1);
++            if (ch === CH_DOLLAR && next < this.srcEnd) {
+                 if (after === CH_SQUOTE) {
+-                    pos = decodeAnsiCQuoted(this.src, pos + 2, this.srcEnd).end;
++                    pos = decodeAnsiCQuoted(this.src, next + 1, this.srcEnd).end;
+                     wordStart = false;
+                     continue;
+                 }
+                 if (after === CH_DOLLAR) {
+-                    pos += 2; // `$$` consumes its second `$`, so a `{` after it opens nothing
++                    pos = next + 1; // `$$` consumes its second `$`, so a `{` after it opens nothing
+                     wordStart = false;
+                     continue;
+                 }
+                 if (after === CH_LBRACE && braces) {
+                     delimiters.push(CH_RBRACE);
+                     bracketStarts?.push([]);
+-                    pos += 2;
++                    pos = next + 1;
+                     wordStart = false;
+                     continue;
+                 }
+@@ -1205,10 +1206,9 @@
+         this.pos = startPos;
+         // Handle process substitution words <(...) and >(...)
+         const ch = this.src.charCodeAt(startPos);
+-        if ((ch === 0x3c /* < */ || ch === 0x3e) /* > */ &&
+-            startPos + 1 < this.srcEnd &&
+-            this.src.charCodeAt(startPos + 1) === 0x28 /* ( */) {
+-            this.pos = startPos + 2;
++        const open = skipLineContinuations(this.src, startPos + 1, this.srcEnd);
++        if ((ch === CH_LT || ch === CH_GT) && this.src.charCodeAt(open) === CH_LPAREN) {
++            this.pos = open + 1;
+             const inner = this.extractBalanced();
+             const text = this.src.slice(startPos, this.pos);
+             const part = this.processSubstitution(startPos, text, ch === 0x3c ? "<" : ">", inner);
+@@ -1716,7 +1716,8 @@
+         this.pos++;
+         const nextPos = skipLineContinuations(src, this.pos, this.srcEnd);
+         const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
+-        if (next === CH_LPAREN && nextPos === this.pos) {
++        if (next === CH_LPAREN) {
++            this.pos = nextPos;
+             this.readProcessSubstitution(out, ch === CH_LT ? "<" : ">", tokenStart);
+             return true;
+         }
+@@ -2049,7 +2050,7 @@
+         this.readWordText(false, ctx, true);
+         if (ctx === LexContext.Normal) {
+             const next = this.pos < this.srcEnd ? this.src.charCodeAt(this.pos) : 0;
+-            if (!this._wordRaw || (next !== CH_LT && next !== CH_GT)) {
++            if (next !== CH_LT && next !== CH_GT) {
+                 setSpanToken(out, Token.Word, tokenStart, this.pos, this._wordRaw);
+                 out.keywordEligible = this._wordKeywordEligible;
+                 return;
+@@ -2206,6 +2207,16 @@
+         if (!hasExpansions && this.pos < this.srcEnd) {
+             const nc = src.charCodeAt(this.pos);
+             if (nc === CH_LT || nc === CH_GT) {
++                if (!raw && !quoted) {
++                    const logical = src.slice(tokenStart, wordEnd).replace(/\\\n/g, "");
++                    const variable = /^\{([a-zA-Z_][a-zA-Z_0-9]*)\}$/.exec(logical);
++                    if ((variable || /^\d+$/.test(logical)) && this.readRedirection(out, nc, tokenStart)) {
++                        if (variable) out.variableName = variable[1];
++                        else out.fileDescriptor = Number.parseInt(logical, 10);
++                        out.descriptorEnd = wordEnd;
++                        return;
++                    }
++                }
+                 if (raw) {
+                     const fc = src.charCodeAt(tokenStart);
+                     if (fc >= CH_0 && fc <= CH_9 && isAllDigitsRange(src, tokenStart, wordEnd)) {
+@@ -3148,13 +3159,13 @@
+             return;
+         }
+         const logicalPos = skipLineContinuations(src, this.pos, len);
+-        if (logicalPos > this.pos &&
+-            src.charCodeAt(logicalPos) === CH_LPAREN &&
+-            src.charCodeAt(logicalPos + 1) !== CH_LPAREN)
++        const logicalChar = src.charCodeAt(logicalPos);
++        if (logicalChar === CH_LPAREN || logicalChar === CH_LBRACE)
+             this.pos = logicalPos;
+         const ch = src.charCodeAt(this.pos);
+         if (ch === CH_LPAREN) {
+-            if (this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
++            const secondOpen = skipLineContinuations(src, this.pos + 1, len);
++            if (src.charCodeAt(secondOpen) === CH_LPAREN) {
+                 const savedPos = this.pos;
+                 const savedErrors = this.errors.length;
+                 this.readArithmeticExpansion(dollarPos);
+@@ -3176,7 +3187,7 @@
+                 this.readValueSubstitution();
+                 return;
+             }
+-            this.readParameterExpansion(insideDoubleQuotes);
++            this.readParameterExpansion(insideDoubleQuotes, dollarPos);
+             return;
+         }
+         if (ch === CH_SQUOTE) {
+@@ -3292,7 +3303,7 @@
+     scanArithmeticBody() {
+         this._notArithmetic = false;
+         this._arithUnterminated = false;
+-        this.pos += 2;
++        this.pos = skipLineContinuations(this.src, this.pos + 1, this.srcEnd) + 1;
+         let depth = 1;
+         let parenDepth = 0;
+         let parentParenDepth = 0;
+@@ -3301,6 +3312,7 @@
+         const src = this.src;
+         const len = this.srcEnd;
+         const start = this.pos;
++        let bodyEnd = start;
+         while (this.pos < len && depth > 0) {
+             const c = src.charCodeAt(this.pos);
+             if (c === CH_BACKSLASH) {
+@@ -3371,13 +3383,11 @@
+                 parenDepth--;
+                 this.pos++;
+             }
+-            else if (c === CH_RPAREN && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_RPAREN) {
+-                if (--depth === 0) {
+-                    this.pos += 2;
+-                    break;
+-                }
++            else if (c === CH_RPAREN && src.charCodeAt(skipLineContinuations(src, this.pos + 1, len)) === CH_RPAREN) {
++                bodyEnd = this.pos;
++                this.pos = skipLineContinuations(src, this.pos + 1, len) + 1;
++                if (--depth === 0) break;
+                 parenDepth = depth === 1 ? parentParenDepth : parenDepths.pop();
+-                this.pos += 2;
+             }
+             else if (c === CH_RPAREN && depth === 1) {
+                 // Bash reads `((` and `$((` as arithmetic only when the inner parenthesis pair is
+@@ -3395,10 +3405,10 @@
+             this._arithUnterminated = true;
+             return bt ? src.slice(start, this.pos) : "";
+         }
+-        return bt ? src.slice(start, this.pos - 2) : "";
++        return bt ? src.slice(start, bodyEnd) : "";
+     }
+     readArithmeticExpansion(dollarPos) {
+-        const bodyStart = this.pos + 2; // absolute offset of the body, past the "((" at this.pos
++        const bodyStart = skipLineContinuations(this.src, this.pos + 1, this.srcEnd) + 1;
+         const body = this.scanArithmeticBody();
+         if (this._notArithmetic)
+             return;
+@@ -3583,7 +3593,7 @@
+             this._resultPart = undefined;
+         }
+     }
+-    readParameterExpansion(insideDoubleQuotes) {
++    readParameterExpansion(insideDoubleQuotes, dollarPos) {
+         const src = this.src;
+         const len = this.srcEnd;
+         const start = this.pos; // at {
+@@ -3594,23 +3604,24 @@
+             const ch = src.charCodeAt(this.pos);
+             if (ch === CH_DOLLAR) {
+                 // Dispatch forward: `$$` consumes its own second `$`, so a `{` after it is literal.
+-                const next = this.pos + 1 < len ? src.charCodeAt(this.pos + 1) : 0;
++                const nextPos = skipLineContinuations(src, this.pos + 1, len);
++                const next = src.charCodeAt(nextPos);
+                 if (next === CH_LBRACE) {
+                     depth++;
+                     if (this._nestingDepth + depth > MAX_SYNTAX_NESTING && !reported) {
+                         this.errors.push({ message: "maximum parameter expansion nesting depth exceeded", pos: this.pos });
+                         reported = true;
+                     }
+-                    this.pos += 2;
++                    this.pos = nextPos + 1;
+                     continue;
+                 }
+                 if (next === CH_DOLLAR) {
+-                    this.pos += 2;
++                    this.pos = nextPos + 1;
+                     continue;
+                 }
+                 if (next === CH_LPAREN) {
+                     const dollarPos = this.pos;
+-                    this.pos += 2;
++                    this.pos = nextPos + 1;
+                     this.extractBalanced();
+                     if (this._unbalanced)
+                         this.errors.push({ message: "unterminated command substitution", pos: dollarPos });
+@@ -3655,14 +3666,14 @@
+         }
+         const closed = depth === 0;
+         if (!closed)
+-            this.errors.push({ message: "unterminated parameter expansion", pos: start - 1 });
+-        const text = this._buildParts || this._buildValue ? src.slice(start - 1, this.pos) : "";
++            this.errors.push({ message: "unterminated parameter expansion", pos: dollarPos });
++        const text = this._buildParts || this._buildValue ? src.slice(dollarPos, this.pos) : "";
+         this._resultText = text;
+         this._resultIsRaw = true;
+         this._resultHasExpansion = false;
+         if (this._buildParts) {
+             const inner = src.slice(start + 1, closed ? this.pos - 1 : this.pos);
+-            this._resultPart = this.parseParamInner(text, inner, start + 1, insideDoubleQuotes);
++            this._resultPart = this.parseParamInner(text, inner, start + 1, insideDoubleQuotes, dollarPos);
+         }
+         else {
+             this._resultPart = undefined;
+@@ -3671,10 +3682,10 @@
+     // `innerStart` is the absolute offset of `inner` in the original source, so each sub-field
+     // word is parsed in place at its true position. `sub(a, b)` maps inner-relative offsets to
+     // that absolute window.
+-    parseParamInner(text, inner, innerStart, insideDoubleQuotes) {
++    parseParamInner(text, inner, innerStart, insideDoubleQuotes, dollarPos) {
+         const result = {
+             type: "ParameterExpansion",
+-            pos: innerStart - 2,
++            pos: dollarPos,
+             end: this.pos,
+             text,
+             parameter: "",
+@@ -3692,40 +3703,45 @@
+             const close = this.findClosingBracket(innerStart + start, innerStart + ilen);
+             return close === -1 ? -1 : close - innerStart;
+         };
+-        let i = 0;
+-        if (ilen > 1 && inner.charCodeAt(0) === CH_BANG) {
++        const skip = at => skipLineContinuations(inner, at, ilen);
++        const logicalText = (start, end) => inner.slice(start, end).replace(/\\\n/g, "");
++        let i = skip(0);
++        if (i + 1 < ilen && inner.charCodeAt(i) === CH_BANG) {
+             result.prefix = "!";
+-            i = 1;
++            i = skip(i + 1);
+         }
+-        if (ilen > 1 && inner.charCodeAt(0) === CH_HASH) {
+-            const nameEnd = this.scanParamName(inner, 1);
+-            let parameterEnd = nameEnd;
++        if (i + 1 < ilen && inner.charCodeAt(i) === CH_HASH) {
++            const lengthName = skip(i + 1);
++            const nameEnd = this.scanParamName(inner, lengthName);
++            let parameterEnd = skip(nameEnd);
+             let indexEnd = -1;
++            const indexStart = parameterEnd + 1;
+             if (parameterEnd < ilen && inner.charCodeAt(parameterEnd) === CH_LBRACKET) {
+                 indexEnd = closeBracket(parameterEnd + 1);
+                 if (indexEnd !== -1)
+                     parameterEnd = indexEnd + 1;
+             }
+-            if (nameEnd > 1 && parameterEnd === ilen) {
++            if (nameEnd > lengthName && skip(parameterEnd) === ilen) {
+                 result.prefix = "#";
+-                result.parameter = inner.slice(1, nameEnd);
+-                result.parameterPos = innerStart + 1;
++                result.parameter = logicalText(lengthName, nameEnd);
++                result.parameterPos = innerStart + lengthName;
+                 result.parameterEnd = innerStart + nameEnd;
+                 if (indexEnd !== -1)
+-                    result.index = sub(nameEnd + 1, indexEnd, "embedded");
++                    result.index = sub(indexStart, indexEnd, "embedded");
+                 return result;
+             }
+         }
+         const nameStart = i;
+         i = this.scanParamName(inner, i);
+-        result.parameter = inner.slice(nameStart, i);
++        result.parameter = logicalText(nameStart, i);
+         result.parameterPos = innerStart + nameStart;
+         result.parameterEnd = innerStart + i;
++        i = skip(i);
+         if (i < ilen && inner.charCodeAt(i) === CH_LBRACKET) {
+             const closeB = closeBracket(i + 1);
+             if (closeB !== -1) {
+                 result.index = sub(i + 1, closeB, "embedded");
+-                i = closeB + 1;
++                i = skip(closeB + 1);
+             }
+         }
+         if (i >= ilen)
+@@ -3733,10 +3749,11 @@
+         const pos = innerStart + i;
+         const end = innerStart + ilen;
+         const opChar = inner.charCodeAt(i);
+-        const nextChar = inner.charCodeAt(i + 1);
+-        const defaultChar = inner[opChar === CH_COLON ? i + 1 : i];
++        const nextPos = skip(i + 1);
++        const nextChar = inner.charCodeAt(nextPos);
++        const defaultChar = inner[opChar === CH_COLON ? nextPos : i];
+         if (defaultChar === "-" || defaultChar === "=" || defaultChar === "+" || defaultChar === "?") {
+-            const operandStart = i + (opChar === CH_COLON ? 2 : 1);
++            const operandStart = (opChar === CH_COLON ? nextPos : i) + 1;
+             result.operation = {
+                 type: "Default",
+                 pos,
+@@ -3767,7 +3784,7 @@
+         if (opChar === CH_HASH || opChar === CH_PERCENT) {
+             const doubled = nextChar === opChar;
+             const operator = opChar === CH_HASH ? (doubled ? "##" : "#") : doubled ? "%%" : "%";
+-            const operandStart = i + (doubled ? 2 : 1);
++            const operandStart = (doubled ? nextPos : i) + 1;
+             result.operation = {
+                 type: "Remove",
+                 pos,
+@@ -3783,7 +3800,7 @@
+             let operator = "/";
+             if (nextChar === CH_SLASH || nextChar === CH_HASH || nextChar === CH_PERCENT) {
+                 operator = nextChar === CH_SLASH ? "//" : nextChar === CH_HASH ? "/#" : "/%";
+-                i++;
++                i = nextPos + 1;
+             }
+             let separatorStart = i;
+             if (nextChar === CH_SLASH) {
+@@ -3808,7 +3825,7 @@
+         if (opChar === CH_CARET || opChar === CH_COMMA) {
+             const doubled = nextChar === opChar;
+             const operator = opChar === CH_CARET ? (doubled ? "^^" : "^") : doubled ? ",," : ",";
+-            const operandStart = i + (doubled ? 2 : 1);
++            const operandStart = (doubled ? nextPos : i) + 1;
+             result.operation = {
+                 type: "CaseModification",
+                 pos,
+@@ -3821,7 +3838,7 @@
+         }
+         if (result.prefix === "!" &&
+             result.index === undefined &&
+-            i + 1 === ilen &&
++            skip(i + 1) === ilen &&
+             (opChar === CH_AT || opChar === CH_STAR)) {
+             result.operation = { type: "Names", pos, end, operatorEnd: end, operator: opChar === CH_AT ? "@" : "*" };
+             return result;
+@@ -3895,20 +3912,25 @@
+         }
+         // Digits
+         if (c >= CH_0 && c <= CH_9) {
+-            while (i < s.length && s.charCodeAt(i) >= CH_0 && s.charCodeAt(i) <= CH_9)
+-                i++;
++            while (i < s.length) {
++                const next = skipLineContinuations(s, i, s.length);
++                const digit = s.charCodeAt(next);
++                if (!(digit >= CH_0 && digit <= CH_9)) break;
++                i = next + 1;
++            }
+             return i;
+         }
+         // Regular name: [a-zA-Z_][a-zA-Z0-9_]*
+         if ((c >= CH_a && c <= CH_z) || (c >= CH_A && c <= CH_Z) || c === CH_UNDERSCORE) {
+             i++;
+             while (i < s.length) {
+-                const ch = s.charCodeAt(i);
++                const next = skipLineContinuations(s, i, s.length);
++                const ch = s.charCodeAt(next);
+                 if ((ch >= CH_a && ch <= CH_z) ||
+                     (ch >= CH_A && ch <= CH_Z) ||
+                     (ch >= CH_0 && ch <= CH_9) ||
+                     ch === CH_UNDERSCORE)
+-                    i++;
++                    i = next + 1;
+                 else
+                     break;
+             }
