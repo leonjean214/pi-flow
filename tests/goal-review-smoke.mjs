@@ -39,6 +39,7 @@ try {
 	await runScenario(checksValidationScenario);
 	await runScenario(checkRunRecoveryRulesScenario);
 	await runScenario(acceptanceCheckedShaRecoveryScenario);
+	await runScenario(acceptanceCheckedShaCacheScenario);
 	await runScenario(checkDisciplineHelpersScenario);
 	await runScenario(goalTokenBudgetScenario);
 	await runScenario(flowAcceptancePromptIncludesPlanScenario);
@@ -548,6 +549,39 @@ async function acceptanceCheckedShaRecoveryScenario() {
 	const { checkedSha: _legacyMissing, ...legacy } = first;
 	const legacyResumed = await capture(1, legacy);
 	assert(legacyResumed.runId === first.runId && legacyResumed.checkedSha === null, JSON.stringify(legacyResumed));
+}
+
+async function acceptanceCheckedShaCacheScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	const cwd = join(out, "acceptance-sha-cache");
+	mkdirSync(cwd, { recursive: true });
+	const pass = captureCommand("PASS\nOK\n证据：文件=src/app.ts；命令=npm test\n");
+	const unchanged = { model: "test/unchanged", thinking: "off", command: pass };
+	const changed = { model: "test/changed", thinking: "off", command: pass };
+	writeConfig({ acceptance: true, command: pass, models: [unchanged, changed] });
+	const firstSha = commitFixture(cwd, "A");
+	const ctx = mockContext(createState(), cwd);
+	const audit = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round: 1, ...options });
+	let first;
+	await audit({ onCheckRun(value) { first = value; return "deferred"; } });
+	assert(first?.checkedSha === firstSha, JSON.stringify(first));
+	first.models[0].outcome = { result: "failed", summary: "old FAIL from A", details: "FAIL\nold FAIL from A\nstandard 1\n" };
+	const secondSha = commitFixture(cwd, "B");
+	writeConfig({ acceptance: true, command: pass, models: [unchanged, { ...changed, model: "test/replacement" }] });
+	// Model the case where the persisted input hash is unchanged across the reviewer swap.
+	let newInput;
+	await audit({ onCheckRun(value) { newInput = value; return "deferred"; } });
+	assert(first.models[0].key === newInput.models[0].key && first.models[1].key !== newInput.models[1].key,
+		"only the second reviewer key should change");
+	first.inputHash = newInput.inputHash;
+	for (const prior of [first, { ...first, checkedSha: null }]) {
+		let started;
+		const final = await audit({ active: prior, onCheckRun(value) { started ??= value; return "saved"; } });
+		assert(started.runId !== prior.runId && started.models.every((model) => model.outcome === null),
+			`stale cached reviewer: ${JSON.stringify(started)}`);
+		assert(final.kind === "result" && final.audit.checkedSha === secondSha && final.audit.complete,
+			`stale reviewer outcome: ${JSON.stringify(final)}`);
+	}
 }
 
 async function flowAcceptancePromptIncludesPlanScenario() {
@@ -4692,6 +4726,7 @@ async function flowAcceptancePostDeliveryLockFailureScenario() {
 	const cwd = join(out, "flow-acceptance-post-delivery-lock");
 	const sessionFile = join(cwd, "goal-session.jsonl");
 	writeFlow(cwd, sessionFile);
+	const checkedSha = commitFixture(cwd, "same commit across reviewer changes");
 	const { acquireFlowLock } = await import(
 		`file://${join(srcOut, "flow/lock.js")}?post-acceptance=${Date.now()}`
 	);
@@ -4741,7 +4776,8 @@ async function flowAcceptancePostDeliveryLockFailureScenario() {
 	flow = readFlow(cwd);
 	assert(
 		flow.goals[0].checks.acceptance.active === null &&
-			flow.goals[0].checks.acceptance.rounds[0]?.result === "failed",
+			flow.goals[0].checks.acceptance.rounds[0]?.result === "failed" &&
+			flow.goals[0].checks.acceptance.rounds[0]?.checkedSha === checkedSha,
 		JSON.stringify(flow.goals[0].checks.acceptance),
 	);
 	assert(

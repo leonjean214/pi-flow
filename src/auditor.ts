@@ -140,9 +140,13 @@ export async function auditGoalCompletion(
 		checkInputHash("acceptance", prompt),
 		flowConfig.modelRoles.reviewers,
 	);
-	const head = active.runId === prior?.runId
-		? prior.checkedSha ?? null
-		: readCheckedSha(ctx.cwd);
+	const resumed = active.runId === prior?.runId;
+	const head = resumed ? prior.checkedSha ?? null : readCheckedSha(ctx.cwd);
+	// A reviewer change can create a new runId while keeping unchanged model outcomes.
+	// Only carry those outcomes across runs if both runs checked the same known commit.
+	if (!resumed && prior && (head === null || head !== prior.checkedSha)) {
+		active.models = active.models.map((model) => ({ ...model, outcome: null }));
+	}
 	active = { ...active, checkedSha: head };
 	if (
 		(await options.onCheckRun?.(active, prior?.generation ?? null)) ===
