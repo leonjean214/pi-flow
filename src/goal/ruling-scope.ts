@@ -157,36 +157,81 @@ const wrapperSwitches: Readonly<Record<string, readonly string[]>> = {
 export function isGitPushCommand(command: string) {
 	let pos = 0;
 	let found = false;
-	// Match continuations at unquoted token boundaries without rewriting quoted
-	// text or the raw lines used to find heredoc delimiters.
-	const join = String.raw`(?:\\\n)*`;
-	const name = `[A-Za-z_]${join}(?:[A-Za-z_0-9]${join})*`;
-	const redirect = new RegExp(
-		String.raw`(?:(?:[0-9]${join})+|\{${join}${name}\}${join})?(?:<<<|<<-|<<|>>|>&|<&|<>|>\||>|<)|&>>?`,
-		"y",
-	);
-	const assignment = new RegExp(`^${name}=`);
-	const arrayAssignment = new RegExp(
-		String.raw`${name}(?:\+${join})?=${join}\(`,
-		"y",
-	);
-	const continued = () => command.startsWith("\\\n", pos);
-	const skipBlanks = () => {
-		while (pos < command.length) {
-			if (continued()) pos += 2;
-			else if (/[ \t]/.test(command[pos])) pos++;
-			else break;
+	// Only grammar positions use the logical cursor. Comments, literal quotes,
+	// and quoted heredoc bodies consume raw input instead.
+	function peek() {
+		while (command.startsWith("\\\n", pos)) pos += 2;
+		return command[pos] ?? "";
+	}
+
+	function eat(token: string) {
+		const start = pos;
+		for (const ch of token) {
+			if (peek() !== ch) {
+				pos = start;
+				return false;
+			}
+			pos++;
 		}
+		return true;
+	}
+
+	const skipBlanks = () => {
+		while (/[ \t]/.test(peek())) pos++;
+	};
+	const skipComment = () => {
+		while (pos < command.length && command[pos] !== "\n") pos++;
 	};
 
-	function readWord(end: string, literal = false) {
+	function readName() {
+		if (!/[A-Za-z_]/.test(peek())) return false;
+		do pos++;
+		while (/[A-Za-z_0-9]/.test(peek()));
+		return true;
+	}
+
+	function readRedirect() {
+		const start = pos;
+		if (eat("{")) {
+			if (!readName() || !eat("}")) pos = start;
+		} else {
+			while (/[0-9]/.test(peek())) pos++;
+		}
+		const ops = ["<<<", "<<-", "<<", ">>", ">&", "<&", "<>", ">|", ">", "<"];
+		const op =
+			ops.find(eat) ?? (pos === start ? ["&>>", "&>"].find(eat) : undefined);
+		if (!op) pos = start;
+		return op;
+	}
+
+	function processSubstitution() {
+		if (!eat("<(") && !eat(">(")) return false;
+		scan(")");
+		return true;
+	}
+
+	function readWord(end: string, literal = false, paired = false) {
 		let word = "";
 		let quoted = false;
 		let quote = "";
 		while (pos < command.length) {
-			const ch = command[pos];
-			if (!quote && (ch === end || /[\s;&|()<>]/.test(ch))) break;
-			if (ch === "\\" && quote !== "'") {
+			const ch = quote === "'" || quote === "$'" ? command[pos] : peek();
+			if (!ch) break;
+			if (!quote && !literal && processSubstitution()) {
+				word += "\0";
+				continue;
+			}
+			if (!quote && (ch === end || (!paired && /[\s;&|()<>]/.test(ch)))) break;
+			if (quote === "$'") {
+				if (ch === "'") quote = "";
+				else if (ch === "\\" && pos + 1 < command.length)
+					word += command[++pos];
+				else word += ch;
+				pos++;
+			} else if (!quote && (eat("$'") || eat('$"'))) {
+				quoted = true;
+				quote = command[pos - 1] === "'" ? "$'" : '"';
+			} else if (ch === "\\" && quote !== "'") {
 				const next = command[pos + 1];
 				if (!next || (quote && !/[\\"$`\n]/.test(next))) {
 					word += ch;
@@ -202,12 +247,19 @@ export function isGitPushCommand(command: string) {
 				quoted = true;
 				quote = quote ? "" : ch;
 				pos++;
-			} else if (
-				!literal &&
-				quote !== "'" &&
-				(ch === "`" || command.startsWith("$(", pos))
-			) {
-				pos += ch === "`" ? 1 : 2;
+			} else if (!literal && quote !== "'" && eat("${")) {
+				readWord("}", false, true);
+				eat("}");
+				word += "\0";
+			} else if (!literal && quote !== "'" && (eat("$((") || eat("$["))) {
+				const close = command[pos - 1] === "[" ? "]" : ")";
+				readWord(close, false, true);
+				eat(close === "]" ? "]" : "))");
+				word += "\0";
+			} else if (paired && !quote && end === ")" && eat("(")) {
+				readWord(")", false, true);
+				eat(")");
+			} else if (!literal && quote !== "'" && (eat("`") || eat("$("))) {
 				scan(ch === "`" ? "`" : ")");
 				word += "\0";
 			} else {
@@ -226,23 +278,34 @@ export function isGitPushCommand(command: string) {
 				pos++;
 				return;
 			}
-			if (command[pos] === "#") {
-				while (pos < command.length && command[pos] !== "\n") pos++;
-			}
+			if (command[pos] === "#") skipComment();
 			if (pos === command.length) return;
-			if (command.startsWith("<(", pos) || command.startsWith(">(", pos)) {
-				pos += 2;
-				scan(")");
-				continue;
-			}
 			const start = pos;
 			readWord(")");
 			if (pos === start) pos++;
 		}
 	}
 
+	function skipHereDoc(delimiter: string, stripTabs: boolean, quoted: boolean) {
+		while (pos < command.length) {
+			let line = "";
+			while (pos < command.length && command[pos] !== "\n") {
+				if (!quoted && command[pos] === "\\" && pos + 1 < command.length) {
+					if (command[pos + 1] !== "\n") line += command.slice(pos, pos + 2);
+					pos += 2;
+				} else line += command[pos++];
+			}
+			if (pos < command.length) pos++;
+			if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter) return;
+		}
+	}
+
 	function scan(end = ""): void {
-		const heredocs: { delimiter: string; stripTabs: boolean }[] = [];
+		const heredocs: {
+			delimiter: string;
+			stripTabs: boolean;
+			quoted: boolean;
+		}[] = [];
 		let mode: "start" | "git" | "other" = "start";
 		let skipValue = false;
 		let wrapper = "";
@@ -255,49 +318,40 @@ export function isGitPushCommand(command: string) {
 				return;
 			}
 			if (ch === "#") {
-				while (pos < command.length && command[pos] !== "\n") pos++;
+				skipComment();
 				continue;
 			}
-			redirect.lastIndex = pos;
-			const op = redirect.exec(command)?.[0];
+			// Process substitution itself is a word, not a redirection.
+			const start = pos;
+			const processWord = eat("<(") || eat(">(");
+			pos = start;
+			const op = processWord ? undefined : readRedirect();
 			if (op) {
-				pos += op.length;
 				skipBlanks();
-				const heredoc = /(?<!<)<<-?$/.test(op);
-				const { word } = readWord(end, heredoc);
+				const heredoc = op === "<<" || op === "<<-";
+				const { word, quoted } = readWord(end, heredoc);
 				if (heredoc)
-					heredocs.push({ delimiter: word, stripTabs: op.endsWith("-") });
+					heredocs.push({ delimiter: word, stripTabs: op === "<<-", quoted });
 				continue;
 			}
 			if (/[;&|()\n]/.test(ch)) {
 				pos++;
 				if (ch === "(") scan(")");
 				if (ch === "\n") {
-					for (const { delimiter, stripTabs } of heredocs.splice(0)) {
-						while (pos < command.length) {
-							const newline = command.indexOf("\n", pos);
-							const line = command.slice(
-								pos,
-								newline < 0 ? command.length : newline,
-							);
-							pos = newline < 0 ? command.length : newline + 1;
-							if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter)
-								break;
-						}
-					}
+					for (const { delimiter, stripTabs, quoted } of heredocs.splice(0))
+						skipHereDoc(delimiter, stripTabs, quoted);
 				}
 				mode = "start";
 				skipValue = false;
 				wrapper = "";
 				continue;
 			}
-			arrayAssignment.lastIndex = pos;
-			if (arrayAssignment.test(command)) {
-				pos = arrayAssignment.lastIndex;
+			const assignment = readName() && (eat("+=") || eat("="));
+			if (assignment && eat("(")) {
 				readArray();
 				continue;
 			}
-			const start = pos;
+			pos = start;
 			const { word, quoted } = readWord(end);
 			if (pos === start) {
 				pos++;
@@ -309,11 +363,7 @@ export function isGitPushCommand(command: string) {
 			}
 			const [option] = word.split("=", 1);
 			if (mode === "start") {
-				if (
-					(!quoted && shellCommandPrefixes.has(word)) ||
-					assignment.test(command.slice(start, pos))
-				)
-					continue;
+				if ((!quoted && shellCommandPrefixes.has(word)) || assignment) continue;
 				if (wrapper && word.startsWith("-")) {
 					if (wrapperOptionsWithValue[wrapper].includes(option))
 						skipValue = option === word;

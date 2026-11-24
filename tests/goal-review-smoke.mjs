@@ -3693,7 +3693,7 @@ async function flowClosedRepairResumeScenario() {
 				ctx,
 			)
 		)?.block === true;
-	for (const push of [
+	const blockCases = [
 		"git push",
 		"git -C repo push origin b",
 		"cd x && git push -u origin b",
@@ -3728,9 +3728,17 @@ async function flowClosedRepairResumeScenario() {
 		"a=(x); git push",
 		'a=("$(git push)")',
 		"(git push) || :",
-	])
-		assert(await blocked(push), `closed repair resume allowed ${push}`);
-	for (const other of [
+		"git {fd}>\\\n&2 push",
+		"git {fd}>\\\n|/dev/null push",
+		"git {fd}<\\\n&0 push",
+		": <<EOF\nEO\\\nF\ngit push\nEOF",
+		"echo $'it\\'s' ; git push",
+		"a=(<\\\n(git push))",
+		`echo "\${missing:-$(git push)}"`,
+		"a=($((1 + ($(git push)))))",
+		"a=($[1 + $(git push)])",
+	];
+	const allowCases = [
 		"git status",
 		"echo push",
 		"git log --grep=push",
@@ -3765,8 +3773,31 @@ async function flowClosedRepairResumeScenario() {
 		"git --exec-path=/usr/lib/git-core status",
 		"git --exec-path push",
 		"git status {fd}>push",
-	])
-		assert(!(await blocked(other)), `closed repair resume blocked ${other}`);
+		": {fd}<\\\n<EOF\ngit push\nEOF",
+		"example=(<\\\n(printf x) git push)",
+		"example=(>\\\n(:) git push)",
+		"example=($" + "{missing:-) ; git push })",
+		"echo $" + "{missing:-;git push }",
+		"a=($((1 + (2))) git push)",
+		"a=($[1 + (2)] git push)",
+		": <<EOF\nfoo \\\nEOF\ngit push\nEOF",
+		": <<'EOF'\nEO\\\nF\ngit push\nEOF",
+	];
+	for (const [expected, cases] of [
+		[true, blockCases],
+		[false, allowCases],
+	]) {
+		for (const command of cases) {
+			const message = `closed repair resume ${expected ? "allowed" : "blocked"}`;
+			assert((await blocked(command)) === expected, `${message} ${command}`);
+			// Quoted literals, comments and heredoc bodies can change meaning.
+			if (/['\\#\n]|<</.test(command)) continue;
+			for (let i = 1; i < command.length; i++) {
+				const split = `${command.slice(0, i)}\\\n${command.slice(i)}`;
+				assert((await blocked(split)) === expected, `${message} ${split}`);
+			}
+		}
+	}
 	writeFileSync(
 		path,
 		`${readFileSync(path, "utf8")}\n## 终审裁定（2026-11-24 11:5x，由主窗口签发）\n本轮必须修。\n`,
