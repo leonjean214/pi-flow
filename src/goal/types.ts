@@ -54,6 +54,8 @@ export interface ActiveCheckRun {
 	/** 逻辑检查运行标识：崩溃恢复沿用，新运行重建。 */
 	runId: string;
 	checkedSha?: string | null;
+	/** Worktree HEAD reflog identity for detecting checkout-and-return. */
+	checkedHeadEpoch?: string;
 	/** 本轮检查启动时刻：同输入恢复沿用，用于轮次用时。 */
 	startedAt?: number;
 	inputHash: string;

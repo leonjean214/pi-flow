@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { statSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ActiveCheckRun, CheckModelOutcome } from "./goal/types.js";
 import type { ReviewCheckpointResult } from "./review/types.js";
@@ -134,10 +135,13 @@ export async function auditGoalCompletion(
 		return { kind: "config_error", message: promptResult.message };
 	const prompt = promptResult.prompt;
 	const prior = options.active;
-	const head = readCheckedSha(ctx.cwd);
+	const observed = readCheckedHead(ctx.cwd);
+	const head = observed?.sha ?? null;
+	const epoch = observed?.epoch;
 	// A resumed reviewer still reads this worktree. A different HEAD therefore
 	// starts a new logical run; never carry outcomes across that boundary.
-	const sameHead = prior && (prior.checkedSha ?? null) === head;
+	const sameHead = prior && (prior.checkedSha ?? null) === head &&
+		prior.checkedHeadEpoch === epoch;
 	let active = startCheckRun(
 		sameHead ? prior : null,
 		options.round,
@@ -149,7 +153,16 @@ export async function auditGoalCompletion(
 	if (head === null && active.runId !== prior?.runId) {
 		active.models = active.models.map((model) => ({ ...model, outcome: null }));
 	}
-	active = { ...active, checkedSha: head };
+	active = { ...active, checkedSha: head, checkedHeadEpoch: epoch };
+	const invalidateChangedHead = () => {
+		if (!active.checkedSha) return false;
+		const current = readCheckedHead(ctx.cwd);
+		if (current?.sha === active.checkedSha && current?.epoch === epoch)
+			return false;
+		// Latch the invalidation; later reviewers cannot re-attribute mixed results.
+		active = { ...active, checkedSha: null };
+		return true;
+	};
 	if (
 		(await options.onCheckRun?.(active, prior?.generation ?? null)) ===
 		"deferred"
@@ -220,6 +233,7 @@ export async function auditGoalCompletion(
 					return;
 				}
 				active = next;
+				invalidateChangedHead();
 				if (
 					(await options.onCheckRun?.(active, active.generation)) === "deferred"
 				) {
@@ -232,6 +246,10 @@ export async function auditGoalCompletion(
 		});
 	} finally {
 		progressScope.close();
+	}
+	if (!checkpointDeferred && invalidateChangedHead()) {
+		checkpointDeferred =
+			(await options.onCheckRun?.(active, active.generation)) === "deferred";
 	}
 	return checkpointDeferred
 		? { kind: "checkpoint_deferred" }
@@ -250,12 +268,16 @@ export async function auditGoalCompletion(
 			};
 }
 
-function readCheckedSha(cwd: string): string | null {
-	const result = spawnSync("git", ["rev-parse", "--verify", "HEAD"], {
+function readCheckedHead(cwd: string) {
+	const result = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "logs/HEAD", "--verify", "HEAD"], {
 		cwd,
 		encoding: "utf8",
 	});
-	return result.status === 0 ? result.stdout.trim() : null;
+	if (result.status !== 0) return null;
+	const [logPath, sha] = result.stdout.trimEnd().split("\n");
+	const log = statSync(logPath, { bigint: true, throwIfNoEntry: false });
+	// Without a worktree HEAD log, equal endpoint SHAs cannot rule out A→B→A.
+	return log ? { sha, epoch: `${log.ino}:${log.size}:${log.mtimeNs}` } : null;
 }
 
 async function runSingleAudit(

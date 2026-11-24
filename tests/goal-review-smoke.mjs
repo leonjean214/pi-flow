@@ -42,6 +42,7 @@ try {
 	await runScenario(acceptanceCheckedShaCacheScenario);
 	await runScenario(acceptanceCheckedShaResumeAfterCheckoutScenario);
 	await runScenario(acceptanceCheckedShaSettlementScenario);
+	await runScenario(acceptanceCheckedShaConcurrentCheckoutScenario);
 	await runScenario(checkDisciplineHelpersScenario);
 	await runScenario(goalTokenBudgetScenario);
 	await runScenario(flowAcceptancePromptIncludesPlanScenario);
@@ -615,10 +616,44 @@ async function acceptanceCheckedShaResumeAfterCheckoutScenario() {
 		JSON.stringify({ a, b, checkpoint, result }));
 	execFileSync("git", ["checkout", "--detach", a], { cwd, stdio: "ignore" });
 	const back = await audit({ active: checkpoint, onCheckRun(value) {
-		assert(value.runId === checkpoint.runId && value.checkedSha === a && value.models[0].outcome, JSON.stringify(value));
+		assert(value.runId !== checkpoint.runId && value.checkedSha === a &&
+			value.models.every((model) => !model.outcome), JSON.stringify(value));
 		return "deferred";
 	} });
 	assert(back.kind === "checkpoint_deferred", JSON.stringify(back));
+}
+
+async function acceptanceCheckedShaConcurrentCheckoutScenario() {
+	const { auditGoalCompletion } = await import(`file://${join(srcOut, "auditor.js")}`);
+	for (const restore of [false, true]) {
+		const cwd = join(out, `acceptance-concurrent-checkout-${restore}`);
+		mkdirSync(cwd, { recursive: true });
+		const a = commitFixture(cwd, "A");
+		const b = commitFixture(cwd, "B");
+		const checkout = (sha) => execFileSync("git", ["checkout", "--detach", sha], { cwd, stdio: "ignore" });
+		checkout(a);
+		const command = shellScript(`
+			cat >/dev/null
+			git checkout --detach ${b} >/dev/null 2>&1 || exit 1
+			seen=$(git rev-parse HEAD) || exit 1
+			${restore ? `git checkout --detach ${a} >/dev/null 2>&1 || exit 1` : ""}
+			printf '%s' ${shellQuote(assistantJson("FAIL\nstandard 1; HEAD: "))} | sed "s/HEAD: /HEAD: $seen/"
+		`);
+		writeConfig({ acceptance: true, command });
+		const ctx = mockContext(createState(), cwd);
+		const run = (options) => auditGoalCompletion({ text: "Verify login", language: "en" }, "", ctx, { round: 1, ...options });
+		const checkpoints = [];
+		const result = await run({ onCheckRun(value) { checkpoints.push(value); return "saved"; } });
+		assert(checkpoints[0]?.checkedSha === a && checkpoints.at(-1)?.checkedSha === null &&
+			result.kind === "result" && result.audit.raw.includes(b) && result.audit.checkedSha === null,
+			JSON.stringify({ restore, a, b, checkpoints, result }));
+		checkout(b);
+		await run({ active: checkpoints.at(-1), onCheckRun(value) {
+			assert(value.runId !== checkpoints[0].runId && value.checkedSha === b &&
+				value.models.every((model) => !model.outcome), JSON.stringify(value));
+			return "deferred";
+		} });
+	}
 }
 
 async function acceptanceCheckedShaSettlementScenario() {
