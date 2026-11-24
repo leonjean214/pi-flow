@@ -41,6 +41,7 @@ try {
 	await runScenario(acceptanceCheckedShaRecoveryScenario);
 	await runScenario(acceptanceCheckedShaCacheScenario);
 	await runScenario(acceptanceCheckedShaResumeAfterCheckoutScenario);
+	await runScenario(acceptanceCheckedShaSettlementScenario);
 	await runScenario(checkDisciplineHelpersScenario);
 	await runScenario(goalTokenBudgetScenario);
 	await runScenario(flowAcceptancePromptIncludesPlanScenario);
@@ -618,6 +619,60 @@ async function acceptanceCheckedShaResumeAfterCheckoutScenario() {
 		return "deferred";
 	} });
 	assert(back.kind === "checkpoint_deferred", JSON.stringify(back));
+}
+
+async function acceptanceCheckedShaSettlementScenario() {
+	const { latestGoalCompletion } = await import(`file://${join(srcOut, "flow/completion.js")}`);
+	const { completeGoalWithFact } = await import(`file://${join(srcOut, "flow/goal-completion.js")}`);
+	const { writeFlow: save } = await import(`file://${join(srcOut, "flow/store.js")}`);
+	const { settleParallelRun } = await import(`file://${join(srcOut, "flow/parallel/fan-in.js")}`);
+	const { writeWorkerCompletion } = await import(`file://${join(srcOut, "flow/parallel/worker-artifact.js")}`);
+	const artifacts = [];
+	for (const parallel of [false, true]) {
+		writeConfig({ acceptance: true, advisor: { enabled: false }, command: sequenceScript([
+			"FAIL\n标准 1\n", "PASS\n验收 OK\n证据：文件=src/app.ts；命令=npm test\n",
+		]) });
+		const cwd = join(out, `acceptance-sha-settlement-${parallel}`);
+		const sessionFile = join(cwd, "goal-session.jsonl");
+		writeFlow(cwd, sessionFile);
+		const dir = join(cwd, ".flow", "F1");
+		const a = commitFixture(cwd, "acceptance A");
+		const state = createState();
+		const { handlers, module } = await loadGoalExtension(state);
+		const ctx = mockContext(state, cwd, sessionFile);
+		const end = () => handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		let artifactPath;
+		if (parallel) {
+			artifactPath = writeWorkerArtifactFixture(dir, sessionFile);
+			await startWorkerArtifactGoal(module, ctx, dir, artifactPath);
+		} else {
+			await module.startGoalFromFlow("Flow objective", ctx);
+		}
+		await end();
+		const b = commitFixture(cwd, "acceptance B");
+		await end();
+		const flow = readFlow(cwd);
+		const fact = latestGoalCompletion(ctx);
+		assert(fact, `missing ${parallel ? "worker" : "serial"} completion fact`);
+		if (parallel) {
+			writeWorkerCompletion(dir, 0, fact, "P1");
+			const worker = JSON.parse(readFileSync(artifactPath, "utf8"));
+			assert(worker.status === "complete", JSON.stringify(worker));
+			artifacts.push(["worker", worker.checks, [a, b]]);
+			settleParallelRun(ctx, dir, { ...flow, parallelRun: { id: "P1", goalIndexes: [0] } },
+				[{ goalIndex: 0, fact: null, exitCode: 0, exitSignal: null, stderr: null }],
+				{ requireSuccessfulExit: true });
+		} else {
+			save(dir, completeGoalWithFact(dir, flow, 0, fact));
+		}
+		const final = readFlow(cwd);
+		assert(final.goals[0].status === "complete", JSON.stringify(final));
+		artifacts.push([parallel ? "fan-in" : "serial", final.goals[0].checks, [a, b]]);
+	}
+	const observed = artifacts.map(([surface, checks, shas]) => ({
+		surface, actual: checks.acceptance.rounds.map((round) => round.checkedSha), expected: shas,
+	}));
+	assert(observed.every(({ actual, expected }) => JSON.stringify(actual) === JSON.stringify(expected)), JSON.stringify(observed));
 }
 
 async function flowAcceptancePromptIncludesPlanScenario() {

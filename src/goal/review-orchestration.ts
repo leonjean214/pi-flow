@@ -814,6 +814,7 @@ function reviewRound(entry: ReviewHistoryEntry) {
 		summary: entry.summary,
 		...(entry.details ? { details: entry.details } : {}),
 		...(entry.models ? { models: entry.models } : {}),
+		...(entry.checkedSha !== undefined ? { checkedSha: entry.checkedSha } : {}),
 	};
 }
 
