@@ -61,6 +61,7 @@ try {
 	await runScenario(currentTaskReviewPromptScenario);
 	await runScenario(englishCurrentTaskReviewPromptScenario);
 	await runScenario(configReadFailureNoticeScenario);
+	await runScenario(reviewRpcWindowBudgetScenario);
 	await runScenario(contextModelFailureStopsScenario);
 	await runScenario(checkpointFailureDoesNotPublishStartScenario);
 	await runScenario(autoFailureScenario);
@@ -1314,10 +1315,74 @@ async function configReadFailureNoticeScenario() {
 	);
 }
 
+async function reviewRpcWindowBudgetScenario() {
+	const { runConfiguredReview } = await import(
+		`file://${join(srcOut, "review.js")}`
+	);
+	for (const window of [400_000, 0]) {
+		const command = captureReviewCommand(
+			"PASS\n质量 OK\n证据：文件=src/app.ts；命令=npm test\n",
+		);
+		writeFileSync(`${command}.window`, String(window));
+		writeReviewConfig("autoFix", command);
+		const state = createState();
+		const ctx = mockContext(state);
+		ctx.modelRegistry.find = (provider, id) => ({
+			provider,
+			id,
+			contextWindow: 32_768,
+		});
+		const goalText = "RPC_WINDOW_BUDGET " + "x".repeat(78_000);
+		state.customEntries.push({
+			type: "message",
+			id: "rpc-budget-requirement",
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: { role: "user", content: goalText },
+		});
+		const result = await runConfiguredReview(mockPi(state), ctx, {
+			scope: { kind: "review", language: "zh" },
+		});
+		const probe = JSON.parse(readFileSync(`${command}.rpc`, "utf8"));
+		assert(
+			probe.request.type === "get_state" && probe.request.id,
+			"review RPC request not recorded",
+		);
+		if (window) {
+			assert(
+				result.kind === "passed",
+				`budgeted review did not pass: ${JSON.stringify(result)}`,
+			);
+			assert(
+				readFileSync(`${command}.args`, "utf8").includes(goalText),
+				"RPC window did not budget actual review prompt",
+			);
+		} else {
+			assert(
+				!existsSync(`${command}.args`),
+				"small registry budget started reviewer",
+			);
+			const diagnostic = state.messages
+				.map((item) => item.message.content)
+				.join("\n");
+			const overflow =
+				/关键来源原文估算需要 (\d+) tokens，超过动态上限 (\d+)/u.exec(
+					diagnostic,
+				);
+			assert(
+				overflow &&
+					Number(overflow[1]) > Number(overflow[2]) &&
+					Number(overflow[2]) < 8192,
+				`missing concrete small-window evidence budget error: ${diagnostic}`,
+			);
+		}
+	}
+}
+
 async function contextModelFailureStopsScenario() {
 	const command = captureReviewCommand(
 		"PASS\n质量 OK\n证据：文件=src/app.ts；命令=npm test\n",
 	);
+	writeFileSync(`${command}.window`, "0");
 	writeReviewConfig("autoFix", command);
 	const state = createState();
 	state.missingModels.add("test/x");
@@ -3850,6 +3915,19 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 		path = join(bin, `diagnostic-router-${diagnosticRouters.size + 1}`);
 		diagnosticRouters.set(defaultCommand, path);
 	}
+	writeFileSync(
+		`${path}.rpc.cjs`,
+		`const fs = require('node:fs');
+const args = process.argv.slice(2);
+const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+const reference = args[args.indexOf('--model') + 1];
+const [provider, ...id] = reference.split('/');
+const command = ${JSON.stringify(defaultCommand)};
+fs.writeFileSync(command + '.rpc', JSON.stringify({args, request}));
+const contextWindow = fs.existsSync(command + '.window') ? Number(fs.readFileSync(command + '.window', 'utf8')) : 200000;
+console.log(JSON.stringify({id: request.id, type: 'response', command: 'get_state', success: true, data: {model: {provider, id: id.join('/'), contextWindow}}}));
+`,
+	);
 	const cases = routes
 		.map(
 			(reviewer) =>
@@ -3860,7 +3938,7 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 	writeFileSync(
 		path,
 		`#!/bin/bash
-if [ "$1" = '--mode' ] && [ "$2" = 'rpc' ]; then cat >/dev/null; exit 0; fi
+if [ "$1" = '--mode' ] && [ "$2" = 'rpc' ]; then exec node ${shellQuote(`${path}.rpc.cjs`)} "$@"; fi
 model=''
 previous=''
 input="$0.stdin.$$"

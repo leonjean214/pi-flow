@@ -10,7 +10,11 @@ import {
 	setGoalActivityBox,
 } from "../shared/activity-frame.js";
 import { requestPiAttention } from "../shared/activity-signal.js";
-import { type Language, readFlowConfig } from "../shared/config.js";
+import {
+	advisorConsultModel,
+	type Language,
+	readFlowConfig,
+} from "../shared/config.js";
 import {
 	buildContextEvidence,
 	formatTranscript,
@@ -1841,12 +1845,13 @@ async function generationRequests(
 			requestText,
 		};
 	}
-	let advisor: ReturnType<typeof readFlowConfig>["modelRoles"]["advisor"];
+	let config: ReturnType<typeof readFlowConfig>;
 	try {
-		advisor = readFlowConfig().modelRoles.advisor;
+		config = readFlowConfig();
 	} catch (error) {
 		return { ok: false, message: formatError(error) };
 	}
+	const advisor = config.modelRoles.advisor;
 	const current = sessionModelReference(ctx);
 	const modelReference = advisor === "current" ? current : advisor.model;
 	const window = ctx.model?.contextWindow;
@@ -1855,7 +1860,11 @@ async function generationRequests(
 			? new Map([[modelReference, window]])
 			: advisor === "current"
 				? undefined
-				: await resolvePiModelWindows([{ ...advisor, command: "pi" }], ctx.cwd);
+				: await resolvePiModelWindows(
+						[advisorConsultModel(config)],
+						ctx.cwd,
+						ctx.signal,
+					);
 	const evidence = buildContextEvidence({
 		entries: sessionEntries(ctx),
 		projection: "requirements",

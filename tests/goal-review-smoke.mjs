@@ -74,6 +74,7 @@ try {
 	await runScenario(flowAcceptanceCancelHasSingleSurfaceScenario);
 	await runScenario(flowQualityCancelHasSingleSurfaceScenario);
 	await runScenario(flowAcceptanceConfigErrorPausesCleanlyScenario);
+	await runScenario(flowAcceptanceRpcWindowBudgetScenario);
 	await runScenario(flowAcceptanceContextModelFailurePausesScenario);
 	await runScenario(flowQualityConfigErrorPausesCleanlyScenario);
 	await runScenario(flowAcceptanceConfigErrorPauseRespectsFlowLockScenario);
@@ -2668,7 +2669,9 @@ async function startWorkerArtifactGoal(module, ctx, dir, artifactPath) {
 
 // worker 拓扑的接管收口：异常事实写自身 artifact（paused + handoff）并发 blocked 事件，禁碰父 flow.json。
 async function workerAcceptanceConfigErrorHandoffScenario() {
-	writeConfig({ acceptance: true, quality: false });
+	const command = script("PASS\nOK\n");
+	writeFileSync(`${command}.window`, "0");
+	writeConfig({ acceptance: true, quality: false, command });
 	const cwd = join(out, "worker-acceptance-config-error");
 	const sessionFile = join(cwd, "worker-session.jsonl");
 	writeFlow(cwd, sessionFile);
@@ -3003,6 +3006,8 @@ async function flowAdvisorFailureDoesNotBlockScenario() {
 	];
 	for (const item of cases) {
 		const failCommand = script("FAIL\n验收不通过\n");
+		if (item.missingAdvisor)
+			writeFileSync(`${item.runnerCommand}.unresolved`, "test/advisor-x");
 		writeConfig({
 			acceptance: true,
 			quality: false,
@@ -3436,8 +3441,61 @@ async function flowAcceptanceConfigErrorPausesCleanlyScenario() {
 	);
 }
 
+async function flowAcceptanceRpcWindowBudgetScenario() {
+	for (const window of [400_000, 0]) {
+		const command = captureCommand(
+			"PASS\nOK\n证据：文件=src/app.ts；命令=npm test\n",
+		);
+		writeFileSync(`${command}.window`, String(window));
+		writeConfig({ acceptance: true, quality: false, command });
+		const cwd = join(out, `acceptance-rpc-budget-${window}`);
+		const sessionFile = join(cwd, "goal-session.jsonl");
+		writeFlow(cwd, sessionFile);
+		const state = createState();
+		const { handlers, module } = await loadGoalExtension(state);
+		const ctx = mockContext(state, cwd, sessionFile);
+		ctx.modelRegistry.find = (provider, id) => ({
+			provider,
+			id,
+			contextWindow: 32_768,
+		});
+		const goalText = "ACCEPTANCE_RPC_BUDGET " + "x".repeat(78_000);
+		await module.startGoalFromFlow(goalText, ctx);
+		await handlers.get("agent_end")(
+			{ messages: [{ role: "assistant", stopReason: "stop" }] },
+			ctx,
+		);
+		const probe = JSON.parse(readFileSync(`${command}.rpc`, "utf8"));
+		assert(
+			probe.request.type === "get_state" && probe.request.id,
+			"acceptance RPC request missing",
+		);
+		if (window) {
+			assert(
+				readFileSync(`${command}.args`, "utf8").includes(goalText),
+				"RPC window did not budget actual acceptance prompt",
+			);
+			assert(
+				readFlow(cwd).goals[0].checks.acceptance.rounds.length === 1,
+				"budgeted acceptance did not finish",
+			);
+		} else {
+			assert(
+				!existsSync(`${command}.args`),
+				"small registry budget started acceptance",
+			);
+			assert(
+				state.messages.some((item) => item.message.content.includes("8192")),
+				"missing concrete acceptance budget error",
+			);
+		}
+	}
+}
+
 async function flowAcceptanceContextModelFailurePausesScenario() {
-	writeConfig({ acceptance: true, quality: false });
+	const command = script("PASS\nOK\n");
+	writeFileSync(`${command}.window`, "0");
+	writeConfig({ acceptance: true, quality: false, command });
 	const cwd = join(out, "flow-acceptance-context-model-error");
 	const sessionFile = join(cwd, "goal-session.jsonl");
 	writeFlow(cwd, sessionFile);
@@ -5342,6 +5400,20 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 		path = join(bin, `diagnostic-router-${diagnosticRouters.size + 1}`);
 		diagnosticRouters.set(defaultCommand, path);
 	}
+	writeFileSync(
+		`${path}.rpc.cjs`,
+		`const fs = require('node:fs');
+const args = process.argv.slice(2);
+const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+const reference = args[args.indexOf('--model') + 1];
+const [provider, ...id] = reference.split('/');
+const command = ${JSON.stringify(defaultCommand)};
+fs.writeFileSync(command + '.rpc', JSON.stringify({args, request}));
+const unresolved = fs.existsSync(command + '.unresolved') && fs.readFileSync(command + '.unresolved', 'utf8') === reference;
+const contextWindow = unresolved ? 0 : fs.existsSync(command + '.window') ? Number(fs.readFileSync(command + '.window', 'utf8')) : 200000;
+console.log(JSON.stringify({id: request.id, type: 'response', command: 'get_state', success: true, data: {model: {provider, id: id.join('/'), contextWindow}}}));
+`,
+	);
 	const cases = routes
 		.map(
 			(reviewer) =>
@@ -5352,7 +5424,7 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 	writeFileSync(
 		path,
 		`#!/bin/bash
-if [ "$1" = '--mode' ] && [ "$2" = 'rpc' ]; then cat >/dev/null; exit 0; fi
+if [ "$1" = '--mode' ] && [ "$2" = 'rpc' ]; then exec node ${shellQuote(`${path}.rpc.cjs`)} "$@"; fi
 model=''
 previous=''
 input="$0.stdin.$$"

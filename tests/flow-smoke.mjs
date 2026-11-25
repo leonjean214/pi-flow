@@ -152,6 +152,11 @@ try {
 	await runScenario(runningValidationScenario);
 	await runScenario(htmlScenario);
 	await runScenario(flowPromptLiteralPlaceholderScenario);
+	await runScenario(flowGenerationAdvisorRpcWindowScenario);
+	await runScenario(flowGenerationCurrentWindowScenario);
+	await runScenario(flowGenerationCurrentRegistryFallbackScenario);
+	await runScenario(flowGenerationProbeConfigFailureScenario);
+	await runScenario(flowGenerationAbortedProbeScenario);
 	await runScenario(flowConversationContextEvidenceScenario);
 	await runScenario(flowConversationContextEvidenceModelFailureScenario);
 	await runScenario(generationAlignConfigScenario);
@@ -5928,6 +5933,192 @@ async function flowPromptLiteralPlaceholderScenario() {
 	assert(
 		repaired.split(literal).length - 1 === 2,
 		`repair prompt rewrote literal placeholders: ${repaired}`,
+	);
+}
+
+async function generationWindowFixture({
+	advisor = "current",
+	window = 400_000,
+	registry = 32_768,
+	current = 400_000,
+	aborted = false,
+	invalid = false,
+} = {}) {
+	const cwd = tempDir("generation-window");
+	const command = join(cwd, "configured-probe");
+	const extension = join(cwd, "external-extension.js");
+	writeFileSync(extension, "export default () => {};\n");
+	writeFileSync(
+		command,
+		`#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+fs.writeFileSync(${JSON.stringify(`${command}.rpc`)}, JSON.stringify({args, request}));
+const model = args[args.indexOf('--model') + 1];
+const [provider, ...id] = model.split('/');
+console.log(JSON.stringify({id: request.id, type: 'response', command: 'get_state', success: true, data: {model: {provider, id: id.join('/'), contextWindow: ${window}}}}));
+`,
+		{ mode: 0o755 },
+	);
+	const trap = join(cwd, "pi");
+	writeFileSync(
+		trap,
+		`#!/bin/sh\necho unexpected > '${trap}.called'\nexit 1\n`,
+		{ mode: 0o755 },
+	);
+	writeFlowTestConfig({
+		generation: { align: "no" },
+		modelRoles: { advisor },
+		background: { command: invalid ? "" : command, extensions: [extension] },
+	});
+	const state = newState(cwd);
+	state.allowModelSwitch = true;
+	const sessionFile = join(cwd, "planning.jsonl");
+	const { commands } = await loadExtension(state);
+	const ctx = commandContext(state, cwd, sessionFile);
+	ctx.model.contextWindow = current;
+	ctx.modelRegistry.find = (provider, id) =>
+		registry ? { provider, id, contextWindow: registry } : undefined;
+	if (aborted) ctx.signal = AbortSignal.abort();
+	const requirement =
+		"WINDOW_REQUIREMENT " + "required original text ".repeat(4000);
+	entriesFor(state, sessionFile).push({
+		type: "message",
+		id: "window-requirement",
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: { role: "user", content: requirement },
+	});
+	const oldPath = process.env.PATH;
+	try {
+		process.env.PATH = `${cwd}:${oldPath}`;
+		await commands.get("flow").handler("", ctx);
+	} finally {
+		process.env.PATH = oldPath;
+	}
+	return { cwd, command, extension, state, requirement, trap };
+}
+
+function assertGenerationWindowSuccess(result) {
+	const { cwd, state, requirement } = result;
+	assert(
+		existsSync(join(cwd, ".flow", "F1", "flow.json")),
+		`window budget rejected generation: ${state.notifications}`,
+	);
+	const flow = readFlow(join(cwd, ".flow", "F1"));
+	assert(
+		flow.source.transcript[0].text === requirement,
+		"window budget lost original requirements",
+	);
+	assert(
+		state.hiddenMessages.at(-1)?.includes(requirement),
+		`budgeted generation prompt missing requirements: ${state.notifications}`,
+	);
+}
+
+async function flowGenerationAdvisorRpcWindowScenario() {
+	const result = await generationWindowFixture({
+		advisor: { model: "test/planner", thinking: "high" },
+	});
+	assert(
+		existsSync(`${result.command}.rpc`),
+		"configured background.command was not used for RPC",
+	);
+	const { args, request } = JSON.parse(
+		readFileSync(`${result.command}.rpc`, "utf8"),
+	);
+	assert(
+		request.type === "get_state" && request.id,
+		"probe did not send get_state",
+	);
+	for (const [flag, value] of [
+		["--mode", "rpc"],
+		["--model", "test/planner"],
+		["--thinking", "high"],
+		["-e", result.extension],
+	])
+		assert(
+			args.some((arg, index) => arg === flag && args[index + 1] === value),
+			`missing ${flag} ${value}`,
+		);
+	assert(
+		args.includes("--no-session") &&
+			args.some((arg) => arg.endsWith("/dist/child.js")),
+		"probe missing no-session or child extension",
+	);
+	assert(!existsSync(`${result.trap}.called`), "hardcoded pi was launched");
+	assertGenerationWindowSuccess(result);
+}
+
+async function flowGenerationCurrentWindowScenario() {
+	for (const advisor of [
+		"current",
+		{ model: "test/current", thinking: "off" },
+	]) {
+		const result = await generationWindowFixture({ advisor });
+		assertGenerationWindowSuccess(result);
+		assert(
+			!existsSync(`${result.command}.rpc`),
+			"current window unnecessarily probed",
+		);
+	}
+}
+
+async function flowGenerationCurrentRegistryFallbackScenario() {
+	const result = await generationWindowFixture({
+		current: 0,
+		registry: 400_000,
+	});
+	assertGenerationWindowSuccess(result);
+	assert(
+		!existsSync(`${result.command}.rpc`),
+		"current registry fallback probed RPC",
+	);
+	const missing = await generationWindowFixture({ current: 0, registry: 0 });
+	assert(
+		!existsSync(join(missing.cwd, ".flow", "F1")),
+		"unresolved window created Flow",
+	);
+	assert(
+		missing.state.notifications.join("\n").includes("无法解析模型窗口"),
+		"missing unresolved diagnostic",
+	);
+}
+
+async function flowGenerationProbeConfigFailureScenario() {
+	const result = await generationWindowFixture({
+		invalid: true,
+		registry: 400_000,
+	});
+	assert(
+		!existsSync(join(result.cwd, ".flow", "F1")),
+		"invalid probe config silently fell back",
+	);
+	assert(
+		result.state.notifications.join("\n").includes("background.command"),
+		"original config error lost",
+	);
+	assert(
+		!existsSync(`${result.command}.rpc`) &&
+			result.state.hiddenMessages.length === 0,
+		"invalid config started work",
+	);
+}
+
+async function flowGenerationAbortedProbeScenario() {
+	const result = await generationWindowFixture({
+		advisor: { model: "test/planner", thinking: "off" },
+		aborted: true,
+		registry: 0,
+	});
+	assert(
+		!existsSync(`${result.command}.rpc`) &&
+			!existsSync(`${result.trap}.called`),
+		"aborted signal did not prevent probe",
+	);
+	assert(
+		!existsSync(join(result.cwd, ".flow", "F1")),
+		"aborted unresolved probe created Flow",
 	);
 }
 
