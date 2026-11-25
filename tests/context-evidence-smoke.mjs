@@ -24,6 +24,7 @@ try {
 	failedModificationOutputScenario(evidence);
 	formattedTextScenario(evidence);
 	budgetScenario(evidence);
+	resolvedWindowScenario(evidence);
 	overflowScenario(evidence);
 	duplicateConversationScenario(evidence);
 	rawTextAndImmutabilityScenario(evidence);
@@ -286,6 +287,83 @@ function overflowScenario(evidence) {
 		overflow.error.message,
 	);
 	assert(overflow.error.message.includes("未静默裁剪"), overflow.error.message);
+}
+
+function resolvedWindowScenario(evidence) {
+	const sol = "openai-codex/gpt-6.2-sol";
+	const fixed = "x".repeat(35_000);
+	const stale = registry({ [sol]: 32_768 });
+	for (const modelRegistry of [stale, registry({})]) {
+		const resolved = evidence.resolveContextEvidenceBudget(
+			[sol],
+			modelRegistry,
+			fixed,
+			"zh",
+			new Map([[sol, 400_000]]),
+		);
+		assert(resolved.ok, JSON.stringify(resolved.error));
+		assert(
+			resolved.budget.minContextWindow === 400_000,
+			"did not use RPC window",
+		);
+		assert(
+			resolved.budget.initialPromptTokenLimit === 100_000,
+			"wrong prompt limit",
+		);
+	}
+	for (const modelRegistry of [stale, registry({})]) {
+		const missing = evidence.resolveContextEvidenceBudget(
+			[sol],
+			modelRegistry,
+			fixed,
+			"zh",
+			new Map(),
+		);
+		assert(
+			!missing.ok && missing.error.code === "model_unresolved",
+			JSON.stringify(missing),
+		);
+		assert(
+			missing.error.message.includes(`无法解析模型窗口（${sol}）`),
+			missing.error.message,
+		);
+		assert(
+			missing.error.availableTokens === undefined,
+			"missing window was reported as an overflow",
+		);
+	}
+	const confirmedSmall = evidence.resolveContextEvidenceBudget(
+		[sol, "custom/large"],
+		registry({ "custom/large": 200_000 }),
+		"",
+		"en",
+		new Map([[sol, 32_768]]),
+	);
+	assert(
+		confirmedSmall.ok &&
+			confirmedSmall.budget.initialPromptTokenLimit === 8_192,
+		"an RPC-confirmed small window must participate in the minimum",
+	);
+	const small = evidence.resolveContextEvidenceBudget(
+		["custom/real-small"],
+		registry({ "custom/real-small": 32_768 }),
+		"",
+		"en",
+	);
+	assert(
+		small.ok && small.budget.initialPromptTokenLimit === 8192,
+		"legitimate small window rejected",
+	);
+	const overflow = evidence.resolveContextEvidenceBudget(
+		["custom/real-small"],
+		registry({ "custom/real-small": 32_768 }),
+		fixed,
+		"en",
+	);
+	assert(
+		!overflow.ok && overflow.error.code === "fixed_prompt_overflow",
+		"real overflow accepted",
+	);
 }
 
 function duplicateConversationScenario(evidence) {

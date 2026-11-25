@@ -19,7 +19,7 @@ import {
 } from "./shared/context-evidence.js";
 import { formatError } from "./shared/guards.js";
 import { autoOpenMonitorOverlay } from "./shared/monitor-overlay.js";
-import { runPiPrompt } from "./shared/pi-process.js";
+import { resolvePiModelWindows, runPiPrompt } from "./shared/pi-process.js";
 import {
 	formatPlanEvidence,
 	type PlanEvidence,
@@ -121,12 +121,19 @@ export async function auditGoalCompletion(
 		};
 	}
 
+	const resolvedWindows = await resolvePiModelWindows(
+		flowConfig.modelRoles.reviewers,
+		ctx.cwd,
+		options.signal,
+	);
+	if (options.signal?.aborted) return { kind: "checkpoint_deferred" };
 	const promptResult = buildAuditPrompt(
 		goal,
 		summary,
 		ctx,
 		flowConfig.modelRoles.reviewers,
 		options.round,
+		resolvedWindows,
 	);
 	if (!promptResult.ok)
 		return { kind: "config_error", message: promptResult.message };
@@ -274,6 +281,7 @@ function buildAuditPrompt(
 	ctx: AuditContext,
 	reviewers: ReviewerConfig[],
 	round: number,
+	resolvedWindows: ReadonlyMap<string, number>,
 ): { ok: true; prompt: string } | { ok: false; message: string } {
 	const plan = formatPlanEvidence(goal.plan, goal.language);
 	const priorRounds = priorRoundsSection(
@@ -301,6 +309,7 @@ ${goal.language === "en" ? "Context Evidence" : "上下文证据"}${separator}
 		language: goal.language,
 		modelReferences: reviewers.map((reviewer) => reviewer.model),
 		modelRegistry: ctx.modelRegistry,
+		resolvedWindows,
 		fixedPrompt,
 	});
 	return evidence.ok

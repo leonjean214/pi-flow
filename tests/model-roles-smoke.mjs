@@ -1,5 +1,6 @@
 import {
 	mkdirSync,
+	readFileSync,
 	rmSync,
 	symlinkSync,
 	unlinkSync,
@@ -304,9 +305,76 @@ try {
 	);
 	assertDeepEqual(currentCalls, []);
 
+	assert(
+		modelRoles.sessionModelReference({
+			model: { provider: "test", id: "a/b" },
+		}) === "test/a/b",
+		"current model identity lost",
+	);
+	assertDeepEqual(
+		modelRoles.currentSessionModel(
+			{ getThinkingLevel: () => "high" },
+			{
+				model: { provider: "test", id: "a/b" },
+			},
+		),
+		{ model: "test/a/b", thinking: "high" },
+	);
+	await modelWindowRpcScenario();
 	console.log("model roles smoke ok");
 } finally {
 	rmSync(out, { recursive: true, force: true });
+}
+
+async function modelWindowRpcScenario() {
+	const { resolvePiModelWindows } = await import(
+		`file://${join(srcOut, "shared/pi-process.js")}`
+	);
+	const command = join(out, "metadata-pi.mjs");
+	writeFileSync(
+		command,
+		`#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const wanted = args[args.indexOf("--model") + 1];
+let stdin = "";
+for await (const chunk of process.stdin) stdin += chunk;
+const { id, type } = JSON.parse(stdin);
+if (type !== "get_state" || args[args.indexOf("--mode") + 1] !== "rpc" ||
+    !args.includes("--no-session") || args.includes("-p") ||
+    !args.includes("/model-provider.mjs") || args[args.indexOf("--thinking") + 1] !== "high") {
+  process.exit(2);
+}
+appendFileSync("metadata-calls.log", wanted + "\\n");
+console.log("{startup diagnostic");
+const [provider, model] = wanted.split("/");
+console.log(JSON.stringify({ id, type: "response", command: "get_state", success: true,
+  data: { model: { provider, id: model === "wrong-id" ? "fallback" : model,
+    contextWindow: model === "unknown" ? 0 : 400000 } } }));
+`,
+		{ mode: 0o755 },
+	);
+	const target = (model) => ({
+		model,
+		command,
+		extensions: ["/model-provider.mjs"],
+		thinking: "high",
+	});
+	const windows = await resolvePiModelWindows(
+		[
+			target("test/selected"),
+			target("test/selected"),
+			target("test/wrong-id"),
+			target("test/unknown"),
+		],
+		out,
+	);
+	assertDeepEqual([...windows], [["test/selected", 400_000]]);
+	const calls = readFileSync(join(out, "metadata-calls.log"), "utf8")
+		.trim()
+		.split("\n")
+		.sort();
+	assertDeepEqual(calls, ["test/selected", "test/unknown", "test/wrong-id"]);
 }
 
 function writeConfig(value) {

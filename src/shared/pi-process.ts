@@ -1,8 +1,84 @@
 import { collectAssistantEvents } from "./assistant-event-stream.js";
 import { childExtensionArgs } from "./child-extensions.js";
-import type { ReviewerConfig } from "./config.js";
+import type { ReviewerConfig, RoleModelSelection } from "./config.js";
+import { isContextWindow } from "./context-evidence.js";
+import { isRecord } from "./guards.js";
 import { openaiFastArgs } from "./openai-fast.js";
 import { runSpawnProcess, type SpawnRunnerResult } from "./spawn-runner.js";
+
+type ModelWindowTarget = RoleModelSelection & {
+	command: string;
+	extensions?: string[];
+};
+
+/** Query each target as Pi would select it, without starting an agent turn. */
+export async function resolvePiModelWindows(
+	targets: readonly ModelWindowTarget[],
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<ReadonlyMap<string, number>> {
+	const unique = new Map<string, ModelWindowTarget>();
+	for (const target of targets)
+		if (!unique.has(target.model)) unique.set(target.model, target);
+	const windows = new Map<string, number>();
+	const id = "pi-flow-model-window";
+	await Promise.all(
+		[...unique.values()].map(async (target) => {
+			if (signal?.aborted) return;
+			const result = await runSpawnProcess({
+				command: target.command,
+				args: [
+					"--mode",
+					"rpc",
+					"--no-session",
+					...(target.extensions ? childExtensionArgs(target.extensions) : []),
+					"--model",
+					target.model,
+					"--thinking",
+					target.thinking,
+				],
+				cwd,
+				stdin: `${JSON.stringify({ id, type: "get_state" })}\n`,
+				timeoutMs: 30_000,
+				signal,
+			});
+			if (result.kind !== "close" || result.code !== 0) return;
+			for (const line of result.stdout.split("\n")) {
+				if (!line.startsWith("{")) continue;
+				let event: unknown;
+				try {
+					event = JSON.parse(line);
+				} catch {
+					// Startup extensions may also write diagnostics to stdout.
+					continue;
+				}
+				if (
+					!isRecord(event) ||
+					event.id !== id ||
+					event.type !== "response" ||
+					event.command !== "get_state"
+				)
+					continue;
+				if (
+					event.success !== true ||
+					!isRecord(event.data) ||
+					!isRecord(event.data.model)
+				)
+					return;
+				const { provider, id: modelId, contextWindow } = event.data.model;
+				if (
+					typeof provider === "string" &&
+					typeof modelId === "string" &&
+					`${provider}/${modelId}` === target.model &&
+					isContextWindow(contextWindow)
+				)
+					windows.set(target.model, contextWindow);
+				return;
+			}
+		}),
+	);
+	return windows;
+}
 
 export async function runPiPrompt(
 	config: ReviewerConfig,

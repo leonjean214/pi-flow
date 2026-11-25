@@ -18,12 +18,16 @@ export function currentSessionModel(
 	pi: Pick<ExtensionAPI, "getThinkingLevel">,
 	ctx: Pick<ExtensionContext, "model">,
 ): RoleModelSelection | undefined {
-	const model = ctx.model;
+	const model = sessionModelReference(ctx);
 	if (!model) return undefined;
 	return {
-		model: `${model.provider}/${model.id}`,
+		model,
 		thinking: pi.getThinkingLevel() as RoleModelSelection["thinking"],
 	};
+}
+
+export function sessionModelReference(ctx: Pick<ExtensionContext, "model">) {
+	return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 }
 
 type RoleModelContext = Pick<ExtensionContext, "ui"> & {

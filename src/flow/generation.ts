@@ -10,10 +10,15 @@ import {
 	setGoalActivityBox,
 } from "../shared/activity-frame.js";
 import { requestPiAttention } from "../shared/activity-signal.js";
-import { type Language, readFlowConfig } from "../shared/config.js";
+import {
+	advisorConsultModel,
+	type Language,
+	readFlowConfig,
+} from "../shared/config.js";
 import {
 	buildContextEvidence,
 	formatTranscript,
+	isContextWindow,
 } from "../shared/context-evidence.js";
 import {
 	buildAlignmentFollowUpPrompt,
@@ -40,8 +45,10 @@ import { sendOrchestrationPrompt } from "../shared/internal-prompt.js";
 import { runtimeLanguage } from "../shared/language.js";
 import {
 	currentSessionModel,
+	sessionModelReference,
 	switchToRoleModel,
 } from "../shared/model-roles.js";
+import { resolvePiModelWindows } from "../shared/pi-process.js";
 import { flowStepLabel } from "../shared/progress-labels.js";
 import { openLiveHtmlInBackgroundOnce } from "../shared/report-client.js";
 import {
@@ -407,7 +414,7 @@ export async function startGeneration(
 	const language = runtimeLanguage();
 	if (blockGenerationPromptIfPending(ctx, language)) return false;
 	const stage = options.mode === "align" ? "aligning" : "generating";
-	const requestResult = generationRequests(
+	const requestResult = await generationRequests(
 		ctx,
 		requestText,
 		sourceType,
@@ -424,6 +431,9 @@ export async function startGeneration(
 		);
 		return false;
 	}
+	// A model metadata probe may have yielded to a newer request.
+	if (activeGenerationsForSession(ctx).length > 0) return false;
+	if (blockGenerationPromptIfPending(ctx, language)) return false;
 	let shell: FlowLocation;
 	let alignment: AlignmentState;
 	try {
@@ -1803,16 +1813,17 @@ function safeCurrentSessionFile(ctx: { sessionManager?: unknown }) {
 	}
 }
 
-function generationRequests(
+async function generationRequests(
 	ctx: ExtensionCommandContext,
 	requestText: string,
 	sourceType: FlowSourceType,
 	sourcePath: string | undefined,
 	language: Language,
 	options: GenerationStartOptions,
-):
+): Promise<
 	| { ok: true; source: FlowSource; requestText: string }
-	| { ok: false; message: string } {
+	| { ok: false; message: string }
+> {
 	if (sourceType === "prompt")
 		return {
 			ok: true,
@@ -1834,24 +1845,33 @@ function generationRequests(
 			requestText,
 		};
 	}
-	let modelReference: string | undefined;
+	let config: ReturnType<typeof readFlowConfig>;
 	try {
-		const advisor = readFlowConfig().modelRoles.advisor;
-		modelReference =
-			advisor === "current"
-				? ctx.model
-					? `${ctx.model.provider}/${ctx.model.id}`
-					: undefined
-				: advisor.model;
+		config = readFlowConfig();
 	} catch (error) {
 		return { ok: false, message: formatError(error) };
 	}
+	const advisor = config.modelRoles.advisor;
+	const current = sessionModelReference(ctx);
+	const modelReference = advisor === "current" ? current : advisor.model;
+	const window = ctx.model?.contextWindow;
+	const resolvedWindows =
+		modelReference && modelReference === current && isContextWindow(window)
+			? new Map([[modelReference, window]])
+			: advisor === "current"
+				? undefined
+				: await resolvePiModelWindows(
+						[advisorConsultModel(config)],
+						ctx.cwd,
+						ctx.signal,
+					);
 	const evidence = buildContextEvidence({
 		entries: sessionEntries(ctx),
 		projection: "requirements",
 		language,
 		modelReferences: modelReference ? [modelReference] : [],
 		modelRegistry: ctx.modelRegistry,
+		resolvedWindows,
 		fixedPrompt: generationFixedPrompt(
 			ctx.cwd,
 			sourceType,
