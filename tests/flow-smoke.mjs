@@ -6051,6 +6051,7 @@ async function flowConversationContextEvidenceModelFailureScenario() {
 	state.missingModels.add("test/current");
 	const { commands } = await loadExtension(state);
 	const ctx = commandContext(state, cwd, sessionFile);
+	ctx.model.contextWindow = 0;
 	await commands.get("flow").handler("", ctx);
 	assert(!existsSync(join(cwd, ".flow", "F1")), "unbudgeted Flow was created");
 	assert(
@@ -13237,7 +13238,11 @@ process.on("SIGTERM", finish);
 setTimeout(() => process.stdout.write(${JSON.stringify(output)}), 30_000);
 `
 		: `process.stdout.write(${JSON.stringify(output)});`;
-	writeFileSync(command, `#!/usr/bin/env node\n${body}\n`, { mode: 0o755 });
+	writeFileSync(
+		command,
+		`#!/usr/bin/env node\nif (process.argv[2] === "--mode" && process.argv[3] === "rpc") {\n  for await (const _ of process.stdin) {}\n  process.exit(0);\n}\n${body}\n`,
+		{ mode: 0o755 },
+	);
 	return { command, startedPath };
 }
 

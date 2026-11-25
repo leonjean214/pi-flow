@@ -3507,7 +3507,10 @@ async function awaitingAgentRestartWithDisabledConfigDiscardsScenario() {
 		join(out, "config.json"),
 		JSON.stringify({
 			language: "zh",
-			background: { command, extensions: [] },
+			background: {
+				command: routedDiagnosticCommand(command, []),
+				extensions: [],
+			},
 			checks: {
 				tools: [],
 				timeoutMinutes: 1 / 6,
@@ -3842,7 +3845,6 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 	const routes = reviewers.filter(
 		(reviewer) => reviewer.command && reviewer.command !== defaultCommand,
 	);
-	if (routes.length === 0) return defaultCommand;
 	let path = diagnosticRouters.get(defaultCommand);
 	if (!path) {
 		path = join(bin, `diagnostic-router-${diagnosticRouters.size + 1}`);
@@ -3858,6 +3860,7 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 	writeFileSync(
 		path,
 		`#!/bin/bash
+if [ "$1" = '--mode' ] && [ "$2" = 'rpc' ]; then cat >/dev/null; exit 0; fi
 model=''
 previous=''
 input="$0.stdin.$$"

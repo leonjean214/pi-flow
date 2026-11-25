@@ -103,6 +103,7 @@ import { formatError, isRecord } from "./shared/guards.js";
 import { sendOrchestrationPrompt } from "./shared/internal-prompt.js";
 import { runtimeLanguage } from "./shared/language.js";
 import { autoOpenMonitorOverlay } from "./shared/monitor-overlay.js";
+import { resolvePiModelWindows } from "./shared/pi-process.js";
 import { formatPlanEvidence } from "./shared/plan-evidence.js";
 import { readPrompt } from "./shared/prompts.js";
 import {
@@ -1172,6 +1173,7 @@ function setQualityActivityBox(ctx: ExtensionContext, loop: ReviewLoop) {
 function buildReviewPrompt(
 	ctx: ExtensionContext,
 	loop: ReviewLoop,
+	resolvedWindows: ReadonlyMap<string, number>,
 ): { ok: true; prompt: string } | { ok: false; message: string } {
 	const language = reviewLanguage(loop);
 	const { fixedPrompt, evidence } = buildReviewEvidence(
@@ -1181,6 +1183,7 @@ function buildReviewPrompt(
 		loop.history,
 		loop.round,
 		language,
+		resolvedWindows,
 	);
 	return evidence.ok
 		? { ok: true, prompt: `${fixedPrompt}${evidence.packet.text}` }
@@ -1194,6 +1197,7 @@ function buildReviewEvidence(
 	history: ReviewHistoryEntry[],
 	round: number,
 	language: Language,
+	resolvedWindows: ReadonlyMap<string, number>,
 	entries = sessionEntriesSince(
 		ctx,
 		scope?.kind === "goal" ? scope.sessionAnchorId : undefined,
@@ -1216,6 +1220,7 @@ function buildReviewEvidence(
 				(reviewer) => reviewer.model,
 			),
 			modelRegistry: ctx.modelRegistry,
+			resolvedWindows,
 			fixedPrompt,
 		}),
 	};
@@ -1306,7 +1311,14 @@ async function prepareReviewRound(
 	ctx: ExtensionContext,
 	loop: ReviewLoop,
 ): Promise<PreparedReviewRound | undefined> {
-	const promptResult = buildReviewPrompt(ctx, loop);
+	const signal = loop.controller.signal;
+	const resolvedWindows = await resolvePiModelWindows(
+		loop.flowConfig.modelRoles.reviewers,
+		ctx.cwd,
+		signal,
+	);
+	if (signal.aborted) return undefined;
+	const promptResult = buildReviewPrompt(ctx, loop, resolvedWindows);
 	if (!promptResult.ok) throw new Error(promptResult.message);
 	const prompt = promptResult.prompt;
 	const prior = loop.activeCheck ?? loop.options.activeCheck;
@@ -2116,6 +2128,10 @@ async function projectStandaloneReviewReport(
 	flowConfig: FlowConfig,
 ) {
 	try {
+		const resolvedWindows = await resolvePiModelWindows(
+			flowConfig.modelRoles.reviewers,
+			ctx.cwd,
+		);
 		const state = readReviewCheckpoint(ctx);
 		if (!state) return;
 		const { evidence } = buildReviewEvidence(
@@ -2125,6 +2141,7 @@ async function projectStandaloneReviewReport(
 			state.history,
 			state.round,
 			language,
+			resolvedWindows,
 			reviewEvidenceEntries(ctx, state),
 		);
 		standaloneReviewReportFiles.set(

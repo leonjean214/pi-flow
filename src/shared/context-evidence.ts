@@ -137,6 +137,7 @@ export function buildContextEvidence(input: {
 	language: Language;
 	modelReferences: readonly string[];
 	modelRegistry: ContextEvidenceRegistry | undefined;
+	resolvedWindows?: ReadonlyMap<string, number>;
 	fixedPrompt: string;
 }): ContextEvidenceResult {
 	const budget = resolveContextEvidenceBudget(
@@ -144,6 +145,7 @@ export function buildContextEvidence(input: {
 		input.modelRegistry,
 		input.fixedPrompt,
 		input.language,
+		input.resolvedWindows,
 	);
 	if (!budget.ok) return budget;
 	return projectContextEvidence(
@@ -159,12 +161,14 @@ export function resolveContextEvidenceBudget(
 	modelRegistry: ContextEvidenceRegistry | undefined,
 	fixedPrompt: string,
 	language: Language,
+	resolvedWindows?: ReadonlyMap<string, number>,
 ):
 	| { ok: true; budget: ContextEvidenceBudget }
 	| { ok: false; error: ContextEvidenceError } {
-	const references = [...new Set(modelReferences)];
-	for (const model of references) {
-		const contextWindow = modelContextWindow(model, modelRegistry);
+	const modelWindows: { model: string; contextWindow: number }[] = [];
+	for (const model of new Set(modelReferences)) {
+		const contextWindow =
+			resolvedWindows?.get(model) ?? modelContextWindow(model, modelRegistry);
 		if (!contextWindow)
 			return {
 				ok: false,
@@ -177,8 +181,9 @@ export function resolveContextEvidenceBudget(
 							: `上下文证据已停止：无法解析模型窗口（${model}）。`,
 				},
 			};
+		modelWindows.push({ model, contextWindow });
 	}
-	if (references.length === 0)
+	if (modelWindows.length === 0)
 		return {
 			ok: false,
 			error: {
@@ -189,10 +194,6 @@ export function resolveContextEvidenceBudget(
 						: "上下文证据已停止：未提供目标模型。",
 			},
 		};
-	const modelWindows = references.map((model) => ({
-		model,
-		contextWindow: modelContextWindow(model, modelRegistry) as number,
-	}));
 	const minContextWindow = Math.min(
 		...modelWindows.map((item) => item.contextWindow),
 	);
@@ -255,11 +256,20 @@ function modelContextWindow(
 	} catch {
 		return undefined;
 	}
-	return typeof model?.contextWindow === "number" &&
-		Number.isFinite(model.contextWindow) &&
-		model.contextWindow > 0
-		? Math.floor(model.contextWindow)
-		: undefined;
+	const window = model?.contextWindow;
+	// These Sol references have been reported with a stale 32K registration.
+	// A real 32K window from Pi's selected-model metadata is still authoritative.
+	if (
+		window === 32_768 &&
+		(reference === "openai-codex/gpt-6.1-sol" ||
+			reference === "openai-codex/gpt-6.2-sol")
+	)
+		return undefined;
+	return isContextWindow(window) ? window : undefined;
+}
+
+export function isContextWindow(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 export function extractContextEvidence(

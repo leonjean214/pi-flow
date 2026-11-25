@@ -16,7 +16,7 @@ import {
 } from "../shared/context-evidence.js";
 import { formatError } from "../shared/guards.js";
 import { autoOpenMonitorOverlay } from "../shared/monitor-overlay.js";
-import { runPiPrompt } from "../shared/pi-process.js";
+import { resolvePiModelWindows, runPiPrompt } from "../shared/pi-process.js";
 import {
 	formatPlanEvidence,
 	type PlanEvidence,
@@ -77,7 +77,13 @@ export async function consultAdvisor(
 	} catch (error) {
 		return { kind: "unavailable", reason: formatError(error) };
 	}
-	const promptResult = buildAdvisorPrompt(input, advisor);
+	const resolvedWindows = await resolvePiModelWindows(
+		[advisor],
+		input.ctx.cwd,
+		input.signal,
+	);
+	if (input.signal?.aborted) return { kind: "aborted" };
+	const promptResult = buildAdvisorPrompt(input, advisor, resolvedWindows);
 	if (!promptResult.ok)
 		return { kind: "unavailable", reason: promptResult.message };
 	const prompt = promptResult.prompt;
@@ -150,6 +156,7 @@ export function advisorUnavailableNotice(reason: string, language: Language) {
 function buildAdvisorPrompt(
 	input: AdvisorConsultInput,
 	advisor: DiagnosticModelConfig,
+	resolvedWindows: ReadonlyMap<string, number>,
 ): { ok: true; prompt: string } | { ok: false; message: string } {
 	const { language } = input;
 	const plan = formatPlanEvidence(input.plan, language);
@@ -170,6 +177,7 @@ ${language === "en" ? "Context Evidence" : "上下文证据"}${separator}
 		language,
 		modelReferences: [advisor.model],
 		modelRegistry: input.ctx.modelRegistry,
+		resolvedWindows,
 		fixedPrompt,
 	});
 	return evidence.ok

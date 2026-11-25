@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	qualityNonRegression,
 	scoreStructuredOutput,
@@ -8,6 +9,7 @@ import {
 	summarizeSamples,
 } from "../scripts/context-evidence-evaluation.mjs";
 import { evaluationRunnerConfig } from "../scripts/evaluate-context-evidence.mjs";
+import { prepareTestDist } from "./prepare-dist.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const benchmark = JSON.parse(
@@ -46,7 +48,50 @@ forgedAndMisattributedEvidenceScenario();
 decoyScenario();
 majorityPlateauScenario();
 persistentFalsePositiveScenario();
+await productionEvidenceBudgetScenario();
 console.log("context evidence evaluation smoke ok");
+
+async function productionEvidenceBudgetScenario() {
+	const out = mkdtempSync(join(tmpdir(), "pi-flow-context-evaluation-smoke-"));
+	try {
+		const dist = join(out, "dist");
+		symlinkSync(join(root, "node_modules"), join(out, "node_modules"), "dir");
+		prepareTestDist(root, dist);
+		const { buildContextEvidence } = await import(
+			pathToFileURL(join(dist, "shared/context-evidence.js")).href
+		);
+		const model = "openai-codex/gpt-6.2-sol";
+		const result = buildContextEvidence({
+			entries: [
+				{
+					type: "message",
+					id: "u1",
+					timestamp: "2026-01-01T00:00:00Z",
+					message: {
+						role: "user",
+						content: "数量 0 是合法值，负数必须返回验证错误。",
+					},
+				},
+			],
+			projection: "review",
+			language: "en",
+			modelReferences: [model],
+			modelRegistry: { find: () => ({ contextWindow: 32_768 }) },
+			resolvedWindows: new Map([[model, 400_000]]),
+			fixedPrompt: "x".repeat(35_000),
+		});
+		assert(
+			result.ok && result.packet.budget.initialPromptTokenLimit === 100_000,
+			JSON.stringify(result),
+		);
+		assert(
+			result.packet.text.includes("数量 0 是合法值，负数必须返回验证错误。"),
+			result.packet.text,
+		);
+	} finally {
+		rmSync(out, { recursive: true, force: true });
+	}
+}
 
 function evaluationRunnerConfigScenario() {
 	assert(

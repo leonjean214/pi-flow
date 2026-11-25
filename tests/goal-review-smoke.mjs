@@ -3251,7 +3251,10 @@ async function flowAcceptanceCancelHasSingleSurfaceScenario() {
 		{ messages: [{ role: "assistant", stopReason: "stop" }] },
 		ctx,
 	);
-	await new Promise((resolve) => setImmediate(resolve));
+	await waitFor(
+		() => readFlow(cwd).goals[0].checks.acceptance.active,
+		"cancellable acceptance checkpoint",
+	);
 	const { cancelActiveFlowActivity } = await import(
 		`file://${join(srcOut, "shared/activity-frame.js")}`
 	);
@@ -3335,7 +3338,10 @@ async function flowQualityCancelHasSingleSurfaceScenario() {
 		{ messages: [{ role: "assistant", stopReason: "stop" }] },
 		ctx,
 	);
-	await new Promise((resolve) => setImmediate(resolve));
+	await waitFor(
+		() => readFlow(cwd).goals[0].checks.quality.active,
+		"cancellable quality checkpoint",
+	);
 	assert(
 		!widgetTexts(state).some((text) => text.includes("思考中 · 0 calls")),
 		"goal-scoped quality rendered a reviewer spinner before its first event",
@@ -5331,7 +5337,6 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 	const routes = reviewers.filter(
 		(reviewer) => reviewer.command && reviewer.command !== defaultCommand,
 	);
-	if (routes.length === 0) return defaultCommand;
 	let path = diagnosticRouters.get(defaultCommand);
 	if (!path) {
 		path = join(bin, `diagnostic-router-${diagnosticRouters.size + 1}`);
@@ -5347,6 +5352,7 @@ function routedDiagnosticCommand(defaultCommand, reviewers) {
 	writeFileSync(
 		path,
 		`#!/bin/bash
+if [ "$1" = '--mode' ] && [ "$2" = 'rpc' ]; then cat >/dev/null; exit 0; fi
 model=''
 previous=''
 input="$0.stdin.$$"
