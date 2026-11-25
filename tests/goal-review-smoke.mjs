@@ -3459,7 +3459,7 @@ async function flowAcceptanceRpcWindowBudgetScenario() {
 			id,
 			contextWindow: 32_768,
 		});
-		const goalText = "ACCEPTANCE_RPC_BUDGET " + "x".repeat(78_000);
+		const goalText = `ACCEPTANCE_RPC_BUDGET ${"x".repeat(78_000)}`;
 		await module.startGoalFromFlow(goalText, ctx);
 		await handlers.get("agent_end")(
 			{ messages: [{ role: "assistant", stopReason: "stop" }] },
@@ -3475,18 +3475,37 @@ async function flowAcceptanceRpcWindowBudgetScenario() {
 				readFileSync(`${command}.args`, "utf8").includes(goalText),
 				"RPC window did not budget actual acceptance prompt",
 			);
+			const acceptance = readFlow(cwd).goals[0].checks.acceptance;
 			assert(
-				readFlow(cwd).goals[0].checks.acceptance.rounds.length === 1,
-				"budgeted acceptance did not finish",
+				acceptance.rounds.length === 1 &&
+					acceptance.rounds[0].result === "passed" &&
+					acceptance.active === null,
+				`budgeted acceptance did not pass: ${JSON.stringify(acceptance)}`,
 			);
 		} else {
 			assert(
 				!existsSync(`${command}.args`),
 				"small registry budget started acceptance",
 			);
+			const diagnostic = state.messages
+				.map((item) => item.message.content)
+				.join("\n");
+			const overflow =
+				/上下文证据已停止：协议与 Pi 预留空间估算需要 (\d+) tokens，超过初始 prompt 上限 (\d+)。/u.exec(
+					diagnostic,
+				);
 			assert(
-				state.messages.some((item) => item.message.content.includes("8192")),
-				"missing concrete acceptance budget error",
+				overflow &&
+					Number(overflow[1]) > Number(overflow[2]) &&
+					Number(overflow[2]) === 8192,
+				`missing concrete acceptance fixed-prompt budget error: ${diagnostic}`,
+			);
+			const flow = readFlow(cwd);
+			assert(
+				flow.status === "paused" &&
+					flow.goals[0].checks.acceptance.rounds.length === 0 &&
+					flow.goals[0].checks.acceptance.active === null,
+				`budget rejection did not pause before checking: ${JSON.stringify(flow.goals[0].checks.acceptance)}`,
 			);
 		}
 	}

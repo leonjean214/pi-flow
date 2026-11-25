@@ -1316,9 +1316,6 @@ async function configReadFailureNoticeScenario() {
 }
 
 async function reviewRpcWindowBudgetScenario() {
-	const { runConfiguredReview } = await import(
-		`file://${join(srcOut, "review.js")}`
-	);
 	for (const window of [400_000, 0]) {
 		const command = captureReviewCommand(
 			"PASS\n质量 OK\n证据：文件=src/app.ts；命令=npm test\n",
@@ -1326,22 +1323,31 @@ async function reviewRpcWindowBudgetScenario() {
 		writeFileSync(`${command}.window`, String(window));
 		writeReviewConfig("autoFix", command);
 		const state = createState();
+		const { commands, events } = await loadExtension(state);
 		const ctx = mockContext(state);
 		ctx.modelRegistry.find = (provider, id) => ({
 			provider,
 			id,
 			contextWindow: 32_768,
 		});
-		const goalText = "RPC_WINDOW_BUDGET " + "x".repeat(78_000);
+		const goalText = `RPC_WINDOW_BUDGET ${"x".repeat(78_000)}`;
 		state.customEntries.push({
 			type: "message",
 			id: "rpc-budget-requirement",
 			timestamp: "2026-01-01T00:00:00.000Z",
 			message: { role: "user", content: goalText },
 		});
-		const result = await runConfiguredReview(mockPi(state), ctx, {
-			scope: { kind: "review", language: "zh" },
-		});
+		await emitAll(events, "session_start", {}, ctx);
+		await commands.get("review").handler("", ctx);
+		const checkpoint = await waitFor(() => {
+			const latest = latestReviewCheckpoint(state);
+			return (
+				latest?.phase === null &&
+				latest.active === null &&
+				latest.history.length === 1 &&
+				latest
+			);
+		}, `budgeted /review did not reach its terminal checkpoint: ${window}`);
 		const probe = JSON.parse(readFileSync(`${command}.rpc`, "utf8"));
 		assert(
 			probe.request.type === "get_state" && probe.request.id,
@@ -1349,8 +1355,11 @@ async function reviewRpcWindowBudgetScenario() {
 		);
 		if (window) {
 			assert(
-				result.kind === "passed",
-				`budgeted review did not pass: ${JSON.stringify(result)}`,
+				checkpoint.history[0].result === "passed" &&
+					state.messages.some(
+						(item) => item.message.details?.title === "质检通过",
+					),
+				`budgeted /review did not pass: ${JSON.stringify(checkpoint)}`,
 			);
 			assert(
 				readFileSync(`${command}.args`, "utf8").includes(goalText),
@@ -1374,7 +1383,15 @@ async function reviewRpcWindowBudgetScenario() {
 					Number(overflow[2]) < 8192,
 				`missing concrete small-window evidence budget error: ${diagnostic}`,
 			);
+			assert(
+				checkpoint.history[0].result === "error" &&
+					overflow &&
+					typeof checkpoint.history[0].details === "string" &&
+					checkpoint.history[0].details.includes(overflow[0]),
+				`budget rejection was not persisted by /review: ${JSON.stringify(checkpoint)}`,
+			);
 		}
+		await emitAll(events, "session_shutdown", {}, ctx);
 	}
 }
 
